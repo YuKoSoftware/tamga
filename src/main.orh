@@ -6,5 +6,5 @@ module main
 #bitsize = 32
 
 func main() void {
-    run_sdl3_test()
+    run_vulkan_test()
 }

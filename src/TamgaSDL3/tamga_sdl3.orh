@@ -1,4 +1,4 @@
-module orhonsdl3
+module tamga_sdl3
 #linkC "SDL3"
 
 // ---- init flags ----
@@ -54,6 +54,7 @@ pub bridge struct Window {
     bridge func setTitle(self: &Window, title: String) void
     bridge func getWidth(self: const &Window) i32
     bridge func getHeight(self: const &Window) i32
+    bridge func getHandle(self: const &Window) Ptr(u8)
 }
 
 // ---- renderer ----

@@ -99,6 +99,10 @@ pub const Window = struct {
         _ = c.SDL_GetWindowSize(self.handle, &w, &h);
         return @intCast(h);
     }
+
+    pub fn getHandle(self: *const Window) *anyopaque {
+        return @ptrCast(self.handle);
+    }
 };
 
 // ---- renderer ----

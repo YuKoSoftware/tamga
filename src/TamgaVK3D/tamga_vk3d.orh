@@ -1,0 +1,11 @@
+module tamga_vk3d
+#linkC "vulkan"
+#linkC "SDL3"
+
+pub bridge struct Renderer {
+    bridge func create(window_handle: Ptr(u8), debug_mode: bool) (Error | Renderer)
+    bridge func destroy(self: &Renderer) void
+    bridge func beginFrame(self: &Renderer) bool
+    bridge func endFrame(self: &Renderer) void
+    bridge func setClearColor(self: &Renderer, r: f32, g: f32, b: f32, a: f32) void
+}
