@@ -1,5 +1,0 @@
-- should we have a separate folder for compiled dynamic libraries ? (clutters src dir)
-
-- when a dynamic lib gets compiled, it gets an interface file, should the interface be tagged as interface instead of module ?
-
--
