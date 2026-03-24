@@ -1,22 +1,22 @@
 module main
 
-import orhonsdl3
-import vulkan
+import tamga_sdl3
+import tamga_vk3d
 import std::console
 
 pub func run_vulkan_test() void {
     console.println("--- Vulkan Renderer Test ---")
 
-    if(!orhonsdl3.init(orhonsdl3.INIT_VIDEO)) {
+    if(!tamga_sdl3.init(tamga_sdl3.INIT_VIDEO)) {
         console.println("SDL3 init failed:")
-        console.println(orhonsdl3.getError())
+        console.println(tamga_sdl3.getError())
         return
     }
-    defer { orhonsdl3.quit() }
+    defer { tamga_sdl3.quit() }
 
     console.println("SDL3 init: ok")
 
-    const winResult = orhonsdl3.Window.create("Vulkan Test", 800, 600, orhonsdl3.WINDOW_VULKAN | orhonsdl3.WINDOW_RESIZABLE)
+    const winResult = tamga_sdl3.Window.create("Vulkan Test", 800, 600, tamga_sdl3.WINDOW_VULKAN | tamga_sdl3.WINDOW_RESIZABLE)
     if(winResult is Error) {
         console.println("Window creation failed:")
         console.println(winResult.Error)
@@ -27,7 +27,7 @@ pub func run_vulkan_test() void {
 
     console.println("Window created with Vulkan flag")
 
-    const renResult = vulkan.Renderer.create(win.getHandle(), true)
+    const renResult = tamga_vk3d.Renderer.create(win.getHandle(), true)
     if(renResult is Error) {
         console.println("Vulkan renderer creation failed:")
         console.println(renResult.Error)
@@ -41,17 +41,17 @@ pub func run_vulkan_test() void {
 
     ren.setClearColor(0.1, 0.1, 0.15, 1.0)
 
-    var event = orhonsdl3.Event.create()
+    var event = tamga_sdl3.Event.create()
     var running: bool = true
 
     while(running) {
         while(event.poll()) {
             const evType = event.getType()
-            if(evType == orhonsdl3.EVENT_QUIT) {
+            if(evType == tamga_sdl3.EVENT_QUIT) {
                 running = false
             }
-            if(evType == orhonsdl3.EVENT_KEY_DOWN) {
-                if(event.getScancode() == orhonsdl3.SCANCODE_ESCAPE) {
+            if(evType == tamga_sdl3.EVENT_KEY_DOWN) {
+                if(event.getScancode() == tamga_sdl3.SCANCODE_ESCAPE) {
                     running = false
                 }
             }
@@ -61,7 +61,7 @@ pub func run_vulkan_test() void {
             ren.endFrame()
         }
 
-        orhonsdl3.delay(16)
+        tamga_sdl3.delay(16)
     }
 
     console.println("Test complete.")
