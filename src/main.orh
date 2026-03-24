@@ -1,0 +1,10 @@
+module main
+
+#name    = "tamga"
+#version = Version(1, 0, 0)
+#build   = exe
+#bitsize = 32
+
+func main() void {
+    run_sdl3_test()
+}

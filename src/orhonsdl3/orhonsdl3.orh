@@ -1,0 +1,88 @@
+module orhonsdl3
+#linkC "SDL3"
+
+// ---- init flags ----
+
+pub bridge const INIT_VIDEO: u32
+pub bridge const INIT_AUDIO: u32
+pub bridge const INIT_EVENTS: u32
+
+// ---- window flags ----
+
+pub bridge const WINDOW_FULLSCREEN: u64
+pub bridge const WINDOW_RESIZABLE: u64
+pub bridge const WINDOW_BORDERLESS: u64
+pub bridge const WINDOW_VULKAN: u64
+pub bridge const WINDOW_OPENGL: u64
+pub bridge const WINDOW_HIGH_PIXEL_DENSITY: u64
+
+// ---- event type constants ----
+
+pub bridge const EVENT_QUIT: u32
+pub bridge const EVENT_KEY_DOWN: u32
+pub bridge const EVENT_KEY_UP: u32
+pub bridge const EVENT_MOUSE_MOTION: u32
+pub bridge const EVENT_MOUSE_BUTTON_DOWN: u32
+pub bridge const EVENT_MOUSE_BUTTON_UP: u32
+
+// ---- scancode constants ----
+
+pub bridge const SCANCODE_ESCAPE: u32
+pub bridge const SCANCODE_SPACE: u32
+pub bridge const SCANCODE_A: u32
+pub bridge const SCANCODE_W: u32
+pub bridge const SCANCODE_S: u32
+pub bridge const SCANCODE_D: u32
+
+// ---- mouse button constants ----
+
+pub bridge const MOUSE_LEFT: u8
+pub bridge const MOUSE_MIDDLE: u8
+pub bridge const MOUSE_RIGHT: u8
+
+// ---- lifecycle ----
+
+pub bridge func init(flags: u32) bool
+pub bridge func quit() void
+pub bridge func getError() String
+
+// ---- window ----
+
+pub bridge struct Window {
+    bridge func create(title: String, w: i32, h: i32, flags: u64) (Error | Window)
+    bridge func destroy(self: &Window) void
+    bridge func setTitle(self: &Window, title: String) void
+    bridge func getWidth(self: const &Window) i32
+    bridge func getHeight(self: const &Window) i32
+}
+
+// ---- renderer ----
+
+pub bridge struct Renderer {
+    bridge func create(win: Window) (Error | Renderer)
+    bridge func destroy(self: &Renderer) void
+    bridge func clear(self: &Renderer) void
+    bridge func present(self: &Renderer) void
+    bridge func setDrawColor(self: &Renderer, r: u8, g: u8, b: u8, a: u8) void
+}
+
+// ---- events ----
+
+pub bridge struct Event {
+    bridge func create() Event
+    bridge func poll(self: &Event) bool
+    bridge func getType(self: const &Event) u32
+    bridge func getScancode(self: const &Event) u32
+    bridge func getKeyRepeat(self: const &Event) bool
+    bridge func getMouseX(self: const &Event) f32
+    bridge func getMouseY(self: const &Event) f32
+    bridge func getMouseXRel(self: const &Event) f32
+    bridge func getMouseYRel(self: const &Event) f32
+    bridge func getMouseButton(self: const &Event) u8
+    bridge func getMouseButtonDown(self: const &Event) bool
+}
+
+// ---- timing ----
+
+pub bridge func getTicks() u64
+pub bridge func delay(ms: u32) void

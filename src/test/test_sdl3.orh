@@ -1,0 +1,62 @@
+module main
+
+import orhonsdl3
+import std::console
+
+pub func run_sdl3_test() void {
+    console.println("--- SDL3 Bridge Test ---")
+
+    if(!orhonsdl3.init(orhonsdl3.INIT_VIDEO)) {
+        console.println("SDL3 init failed:")
+        console.println(orhonsdl3.getError())
+        return
+    }
+    defer { orhonsdl3.quit() }
+
+    console.println("SDL3 init: ok")
+
+    const winResult = orhonsdl3.Window.create("orhonsdl3 test", 800, 600, orhonsdl3.WINDOW_RESIZABLE)
+    if(winResult is Error) {
+        console.println("Window creation failed:")
+        console.println(winResult.Error)
+        return
+    }
+    var win = winResult.value
+    defer { win.destroy() }
+
+    const renResult = orhonsdl3.Renderer.create(win)
+    if(renResult is Error) {
+        console.println("Renderer creation failed:")
+        console.println(renResult.Error)
+        return
+    }
+    var ren = renResult.value
+    defer { ren.destroy() }
+
+    console.println("Window open — press ESC or close to quit")
+
+    var event = orhonsdl3.Event.create()
+    var running: bool = true
+
+    while(running) {
+        while(event.poll()) {
+            const evType = event.getType()
+            if(evType == orhonsdl3.EVENT_QUIT) {
+                running = false
+            }
+            if(evType == orhonsdl3.EVENT_KEY_DOWN) {
+                if(event.getScancode() == orhonsdl3.SCANCODE_ESCAPE) {
+                    running = false
+                }
+            }
+        }
+
+        ren.setDrawColor(25, 25, 40, 255)
+        ren.clear()
+        ren.present()
+
+        orhonsdl3.delay(16)
+    }
+
+    console.println("Test complete.")
+}
