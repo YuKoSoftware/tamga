@@ -31,7 +31,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. The opaque `WindowHandle` type is the only surface exposed to downstream modules — no SDL3 constants, structs, or enums appear above the TamgaSDL3 boundary
   5. Error on initialization failure propagates as an Orhon error union; compiler bugs encountered are logged in docs/bugs.txt before any workaround is attempted
   6. A basic frame loop runs with fixed timestep update and variable render; delta time is accessible to user code; loop starts and stops cleanly
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 01-01-PLAN.md — Rewrite Zig sidecar: RawEvent translator and complete SDL3 bridge
+- [ ] 01-02-PLAN.md — Rewrite Orhon public API: Tamga-native types, typed events, WindowHandle
+- [ ] 01-03-PLAN.md — Frame loop, VK3D WindowHandle update, and integration tests
 
 ### Phase 2: Vulkan 3D Renderer
 **Goal**: A developer can submit arbitrary 3D geometry with textures and lighting, resize the window without a crash, and get correct depth-tested output — with a render graph that supports compute passes and deferred rendering at the engine layer
@@ -89,7 +93,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Platform Foundation | 0/? | Not started | - |
+| 1. Platform Foundation | 0/3 | Planning complete | - |
 | 2. Vulkan 3D Renderer | 0/? | Not started | - |
 | 3. Audio | 0/? | Not started | - |
 | 4. Vulkan 2D Renderer | 0/? | Not started | - |
