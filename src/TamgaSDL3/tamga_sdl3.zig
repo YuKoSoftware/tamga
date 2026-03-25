@@ -55,13 +55,12 @@ pub fn getError() []const u8 {
 
 // ---- window ----
 
-const WindowError = struct { message: []const u8 };
-const WindowResult = union(enum) { ok: Window, err: WindowError };
+const SdlError = error{SdlFailed};
 
 pub const Window = struct {
     handle: *c.SDL_Window,
 
-    pub fn create(title: []const u8, w: i32, h: i32, flags: u64) WindowResult {
+    pub fn create(title: []const u8, w: i32, h: i32, flags: u64) anyerror!Window {
         // copy into a null-terminated stack buffer — SDL3 needs const char*
         var buf: [512]u8 = undefined;
         const len = @min(title.len, buf.len - 1);
@@ -69,9 +68,9 @@ pub const Window = struct {
         buf[len] = 0;
 
         const handle = c.SDL_CreateWindow(@ptrCast(&buf), @intCast(w), @intCast(h), flags) orelse {
-            return .{ .err = .{ .message = std.mem.span(c.SDL_GetError()) } };
+            return SdlError.SdlFailed;
         };
-        return .{ .ok = Window{ .handle = handle } };
+        return Window{ .handle = handle };
     }
 
     pub fn destroy(self: *Window) void {
@@ -107,17 +106,14 @@ pub const Window = struct {
 
 // ---- renderer ----
 
-const RendererError = struct { message: []const u8 };
-const RendererResult = union(enum) { ok: Renderer, err: RendererError };
-
 pub const Renderer = struct {
     handle: *c.SDL_Renderer,
 
-    pub fn create(win: Window) RendererResult {
+    pub fn create(win: Window) anyerror!Renderer {
         const handle = c.SDL_CreateRenderer(win.handle, null) orelse {
-            return .{ .err = .{ .message = std.mem.span(c.SDL_GetError()) } };
+            return SdlError.SdlFailed;
         };
-        return .{ .ok = Renderer{ .handle = handle } };
+        return Renderer{ .handle = handle };
     }
 
     pub fn destroy(self: *Renderer) void {

@@ -53,8 +53,7 @@ const RenderGraph = struct {
 
 // ---- error types for bridge ----
 
-const RendererError = struct { message: []const u8 };
-const RendererResult = union(enum) { ok: Renderer, err: RendererError };
+const VkBridgeError = error{VulkanFailed};
 
 // ---- Vulkan context (internal state) ----
 
@@ -696,14 +695,14 @@ fn recreateSwapchain(ctx: *VulkanContext) bool {
 pub const Renderer = struct {
     ctx: VulkanContext,
 
-    pub fn create(window_handle: *anyopaque, debug_mode: bool) RendererResult {
+    pub fn create(window_handle: *anyopaque, debug_mode: bool) anyerror!Renderer {
         var ctx = VulkanContext{};
         ctx.sdl_window = @ptrCast(@alignCast(window_handle));
         ctx.debug_mode = debug_mode;
 
         // instance
         if (createInstance(&ctx) != c.VK_SUCCESS) {
-            return .{ .err = .{ .message = "failed to create Vulkan instance" } };
+            return VkBridgeError.VulkanFailed;
         }
 
         // debug messenger (non-fatal — silently skip if validation layers unavailable)
@@ -711,45 +710,45 @@ pub const Renderer = struct {
 
         // surface
         if (!createSurface(&ctx)) {
-            return .{ .err = .{ .message = "failed to create Vulkan surface" } };
+            return VkBridgeError.VulkanFailed;
         }
 
         // physical device
         if (!pickPhysicalDevice(&ctx)) {
-            return .{ .err = .{ .message = "failed to find a suitable GPU" } };
+            return VkBridgeError.VulkanFailed;
         }
 
         // logical device
         if (createLogicalDevice(&ctx) != c.VK_SUCCESS) {
-            return .{ .err = .{ .message = "failed to create logical device" } };
+            return VkBridgeError.VulkanFailed;
         }
 
         // swapchain
         if (createSwapchain(&ctx) != c.VK_SUCCESS) {
-            return .{ .err = .{ .message = "failed to create swapchain" } };
+            return VkBridgeError.VulkanFailed;
         }
 
         // render pass
         if (createRenderPass(&ctx) != c.VK_SUCCESS) {
-            return .{ .err = .{ .message = "failed to create render pass" } };
+            return VkBridgeError.VulkanFailed;
         }
 
         // framebuffers
         if (createFramebuffers(&ctx) != c.VK_SUCCESS) {
-            return .{ .err = .{ .message = "failed to create framebuffers" } };
+            return VkBridgeError.VulkanFailed;
         }
 
         // command pool + buffers
         if (createCommandPool(&ctx) != c.VK_SUCCESS) {
-            return .{ .err = .{ .message = "failed to create command pool" } };
+            return VkBridgeError.VulkanFailed;
         }
 
         // sync objects
         if (createSyncObjects(&ctx) != c.VK_SUCCESS) {
-            return .{ .err = .{ .message = "failed to create sync objects" } };
+            return VkBridgeError.VulkanFailed;
         }
 
-        return .{ .ok = Renderer{ .ctx = ctx } };
+        return Renderer{ .ctx = ctx };
     }
 
     pub fn destroy(self: *Renderer) void {
