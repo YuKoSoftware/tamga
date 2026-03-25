@@ -90,6 +90,12 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **XC-05**: Orhon compiler bugs logged in docs/bugs.txt, missing features in docs/ideas.txt
 - [ ] **XC-06**: No workarounds — if compiler blocks framework work, fix compiler first then return
 
+### Frame Loop
+
+- [ ] **LOOP-01**: Basic configurable frame loop with fixed timestep update and variable render
+- [ ] **LOOP-02**: Delta time management accessible to user code
+- [ ] **LOOP-03**: Clean start/stop lifecycle
+
 ## v2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -161,13 +167,80 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated during roadmap creation) | | |
+| WIN-01 | Phase 1 | Pending |
+| WIN-02 | Phase 1 | Pending |
+| WIN-03 | Phase 1 | Pending |
+| WIN-04 | Phase 1 | Pending |
+| WIN-05 | Phase 1 | Pending |
+| WIN-06 | Phase 1 | Pending |
+| WIN-07 | Phase 1 | Pending |
+| WIN-08 | Phase 1 | Pending |
+| WIN-09 | Phase 1 | Pending |
+| WIN-10 | Phase 1 | Pending |
+| WIN-11 | Phase 1 | Pending |
+| WIN-12 | Phase 1 | Pending |
+| WIN-13 | Phase 1 | Pending |
+| WIN-14 | Phase 1 | Pending |
+| XC-01 | Phase 1 | Pending |
+| XC-02 | Phase 1 | Pending |
+| XC-03 | Phase 1 | Pending |
+| XC-04 | Phase 1 | Pending |
+| XC-05 | Phase 1 | Pending |
+| XC-06 | Phase 1 | Pending |
+| LOOP-01 | Phase 1 | Pending |
+| LOOP-02 | Phase 1 | Pending |
+| LOOP-03 | Phase 1 | Pending |
+| VK3-01 | Phase 2 | Pending |
+| VK3-02 | Phase 2 | Pending |
+| VK3-03 | Phase 2 | Pending |
+| VK3-04 | Phase 2 | Pending |
+| VK3-05 | Phase 2 | Pending |
+| VK3-06 | Phase 2 | Pending |
+| VK3-07 | Phase 2 | Pending |
+| VK3-08 | Phase 2 | Pending |
+| VK3-09 | Phase 2 | Pending |
+| VK3-10 | Phase 2 | Pending |
+| VK3-11 | Phase 2 | Pending |
+| VK3-12 | Phase 2 | Pending |
+| VK3-13 | Phase 2 | Pending |
+| VK3-14 | Phase 2 | Pending |
+| VK3-15 | Phase 2 | Pending |
+| VK3-16 | Phase 2 | Pending |
+| AUD-01 | Phase 3 | Pending |
+| AUD-02 | Phase 3 | Pending |
+| AUD-03 | Phase 3 | Pending |
+| AUD-04 | Phase 3 | Pending |
+| AUD-05 | Phase 3 | Pending |
+| AUD-06 | Phase 3 | Pending |
+| AUD-07 | Phase 3 | Pending |
+| VK2-01 | Phase 4 | Pending |
+| VK2-02 | Phase 4 | Pending |
+| VK2-03 | Phase 4 | Pending |
+| VK2-04 | Phase 4 | Pending |
+| VK2-05 | Phase 4 | Pending |
+| VK2-06 | Phase 4 | Pending |
+| VK2-07 | Phase 4 | Pending |
+| VK2-08 | Phase 4 | Pending |
+| VK2-09 | Phase 4 | Pending |
+| VK2-10 | Phase 4 | Pending |
+| VK2-11 | Phase 4 | Pending |
+| GUI-01 | Phase 5 | Pending |
+| GUI-02 | Phase 5 | Pending |
+| GUI-03 | Phase 5 | Pending |
+| GUI-04 | Phase 5 | Pending |
+| GUI-05 | Phase 5 | Pending |
+| GUI-06 | Phase 5 | Pending |
+| GUI-07 | Phase 5 | Pending |
+| GUI-08 | Phase 5 | Pending |
+| GUI-09 | Phase 5 | Pending |
+| GUI-10 | Phase 5 | Pending |
+| GUI-11 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 52 total
-- Mapped to phases: 0
-- Unmapped: 52 (pending roadmap)
+- v1 requirements: 55 total
+- Mapped to phases: 55
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-25*
-*Last updated: 2026-03-25 after initial definition*
+*Last updated: 2026-03-25 after roadmap creation — all 52 requirements mapped*

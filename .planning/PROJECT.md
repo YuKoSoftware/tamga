@@ -37,7 +37,7 @@ Provide a complete, high-performance set of modular libraries that let an Orhon 
 - Networking — future milestone
 - Animation system — future milestone
 - 3D model loading — future milestone
-- Game loop — game engine territory (Tamga engine project)
+- Full game loop with scene management — game engine territory (Tamga engine project)
 
 ## Context
 
@@ -51,6 +51,7 @@ Provide a complete, high-performance set of modular libraries that let an Orhon 
 - Vulkan is the sole graphics backend for this milestone
 - The future Tamga game engine (a separate project, Godot-inspired) will build on top of this framework
 - Existing code: Vulkan 3D renderer prototype, SDL3 bridge, module structure established
+- `src/test/` folder exists for testing libraries as they're built — integration test bed for the framework
 - Both Zig and SDL3 are young software — known/unknown compatibility bugs exist between them; when something breaks, investigate whether it's an Orhon bug, Zig bug, or SDL3 bug before assuming it's our code
 - If a feature can't be done cleanly due to upstream limitations (Zig/SDL3), drop or defer it — never ship hacky workarounds
 
