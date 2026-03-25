@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 - [x] 01-01-PLAN.md — Rewrite Zig sidecar: RawEvent translator and complete SDL3 bridge
 - [x] 01-02-PLAN.md — Rewrite Orhon public API: Tamga-native types, typed events, WindowHandle
-- [ ] 01-03-PLAN.md — Frame loop, VK3D WindowHandle update, and integration tests
+- [x] 01-03-PLAN.md — Frame loop, VK3D WindowHandle update, and integration tests
 
 ### Phase 2: Vulkan 3D Renderer
 **Goal**: A developer can submit arbitrary 3D geometry with textures and lighting, resize the window without a crash, and get correct depth-tested output — with a render graph that supports compute passes and deferred rendering at the engine layer

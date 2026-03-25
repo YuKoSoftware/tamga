@@ -92,9 +92,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Frame Loop
 
-- [ ] **LOOP-01**: Basic configurable frame loop with fixed timestep update and variable render
-- [ ] **LOOP-02**: Delta time management accessible to user code
-- [ ] **LOOP-03**: Clean start/stop lifecycle
+- [x] **LOOP-01**: Basic configurable frame loop with fixed timestep update and variable render
+- [x] **LOOP-02**: Delta time management accessible to user code
+- [x] **LOOP-03**: Clean start/stop lifecycle
 
 ## v2 Requirements
 
@@ -187,9 +187,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | XC-04 | Phase 1 | Complete |
 | XC-05 | Phase 1 | Complete |
 | XC-06 | Phase 1 | Complete |
-| LOOP-01 | Phase 1 | Pending |
-| LOOP-02 | Phase 1 | Pending |
-| LOOP-03 | Phase 1 | Pending |
+| LOOP-01 | Phase 1 | Complete |
+| LOOP-02 | Phase 1 | Complete |
+| LOOP-03 | Phase 1 | Complete |
 | VK3-01 | Phase 2 | Pending |
 | VK3-02 | Phase 2 | Pending |
 | VK3-03 | Phase 2 | Pending |
