@@ -7,19 +7,20 @@ import std::console
 pub func run_vulkan_test() void {
     console.println("--- Vulkan Renderer Test ---")
 
-    if(!tamga_sdl3.init(tamga_sdl3.INIT_VIDEO)) {
+    const initResult = tamga_sdl3.initPlatform()
+    if(initResult is Error) {
         console.println("SDL3 init failed:")
         console.println(tamga_sdl3.getError())
         return
     }
-    defer { tamga_sdl3.quit() }
+    defer { tamga_sdl3.quitPlatform() }
 
     console.println("SDL3 init: ok")
 
-    const winResult = tamga_sdl3.Window.create("Vulkan Test", 800, 600, tamga_sdl3.WINDOW_VULKAN | tamga_sdl3.WINDOW_RESIZABLE)
+    const winResult = tamga_sdl3.Window.create("Vulkan Test", 800, 600, 8)
     if(winResult is Error) {
         console.println("Window creation failed:")
-        console.println(winResult.Error)
+        console.println(tamga_sdl3.getError())
         return
     }
     var win = winResult.value
@@ -27,7 +28,7 @@ pub func run_vulkan_test() void {
 
     console.println("Window created with Vulkan flag")
 
-    const renResult = tamga_vk3d.Renderer.create(win.getHandle(), true)
+    const renResult = tamga_vk3d.Renderer.create(win.getHandle().handle, true)
     if(renResult is Error) {
         console.println("Vulkan renderer creation failed:")
         console.println(renResult.Error)
@@ -41,17 +42,20 @@ pub func run_vulkan_test() void {
 
     ren.setClearColor(0.1, 0.1, 0.15, 1.0)
 
-    var event = tamga_sdl3.Event.create()
     var running: bool = true
 
     while(running) {
-        while(event.poll()) {
-            const evType = event.getType()
-            if(evType == tamga_sdl3.EVENT_QUIT) {
+        const evResult = tamga_sdl3.pollEvent()
+        if(evResult is not null) {
+            const ev = evResult.value
+            if(ev.kind == tamga_sdl3.EventKind.Quit) {
                 running = false
             }
-            if(evType == tamga_sdl3.EVENT_KEY_DOWN) {
-                if(event.getScancode() == tamga_sdl3.SCANCODE_ESCAPE) {
+            if(ev.kind == tamga_sdl3.EventKind.WindowClose) {
+                running = false
+            }
+            if(ev.kind == tamga_sdl3.EventKind.KeyDown) {
+                if(ev.key.scancode == 37) {
                     running = false
                 }
             }
@@ -61,7 +65,7 @@ pub func run_vulkan_test() void {
             ren.endFrame()
         }
 
-        tamga_sdl3.delay(16)
+        tamga_sdl3.delayNS(16000000)
     }
 
     console.println("Test complete.")

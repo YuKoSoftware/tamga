@@ -1,52 +1,346 @@
 module tamga_sdl3
 #linkC "SDL3"
 
-// ---- init flags ----
+// ---- WindowHandle opaque type ----
+// Named opaque wrapper around the raw SDL window pointer.
+// Downstream modules import this type and never dereference or cast it.
+// NOTE: `pub type Alias = T` not yet supported by compiler (see docs/bugs.txt).
+// Using wrapper struct as temporary workaround — the handle field is the opaque pointer.
 
-pub bridge const INIT_VIDEO: u32
-pub bridge const INIT_AUDIO: u32
-pub bridge const INIT_EVENTS: u32
+pub struct WindowHandle {
+    pub handle: Ptr(u8)
+}
 
-// ---- window flags ----
+// ---- WindowFlags bitfield ----
+// Replaces raw u64 SDL3 constants. Callers use: WindowFlags(Resizable, Vulkan)
 
-pub bridge const WINDOW_FULLSCREEN: u64
-pub bridge const WINDOW_RESIZABLE: u64
-pub bridge const WINDOW_BORDERLESS: u64
-pub bridge const WINDOW_VULKAN: u64
-pub bridge const WINDOW_OPENGL: u64
-pub bridge const WINDOW_HIGH_PIXEL_DENSITY: u64
+pub bitfield(u64) WindowFlags {
+    Resizable
+    Fullscreen
+    Borderless
+    Vulkan
+    HighPixelDensity
+}
 
-// ---- event type constants ----
+// ---- Scancode enum ----
+// Tamga-native key identifiers. Sequential values (not SDL3 integers).
+// NOTE: Orhon enums do not support explicit per-variant integer values (see docs/bugs.txt).
+// Translation from SDL3 scancodes to these sequential indices happens in tamga_sdl3.zig.
+// The order here MUST match the SDL3_TO_SCANCODE table in tamga_sdl3.zig.
 
-pub bridge const EVENT_QUIT: u32
-pub bridge const EVENT_KEY_DOWN: u32
-pub bridge const EVENT_KEY_UP: u32
-pub bridge const EVENT_MOUSE_MOTION: u32
-pub bridge const EVENT_MOUSE_BUTTON_DOWN: u32
-pub bridge const EVENT_MOUSE_BUTTON_UP: u32
+pub enum(u32) Scancode {
+    A
+    B
+    C
+    D
+    E
+    F
+    G
+    H
+    I
+    J
+    K
+    L
+    M
+    N
+    O
+    P
+    Q
+    R
+    S
+    T
+    U
+    V
+    W
+    X
+    Y
+    Z
+    Num1
+    Num2
+    Num3
+    Num4
+    Num5
+    Num6
+    Num7
+    Num8
+    Num9
+    Num0
+    Return
+    Escape
+    Backspace
+    Tab
+    Space
+    F1
+    F2
+    F3
+    F4
+    F5
+    F6
+    F7
+    F8
+    F9
+    F10
+    F11
+    F12
+    Delete
+    Right
+    Left
+    Down
+    Up
+    LCtrl
+    LShift
+    LAlt
+    RCtrl
+    RShift
+    RAlt
+    Unknown
+}
 
-// ---- scancode constants ----
+// ---- MouseButton enum ----
+// Sequential values: Left=0, Middle=1, Right=2.
+// NOTE: SDL3 uses 1/2/3 internally; translation to 0/1/2 happens in tamga_sdl3.zig pollRawEvent.
+// See docs/bugs.txt — explicit enum integer values not supported by compiler.
 
-pub bridge const SCANCODE_ESCAPE: u32
-pub bridge const SCANCODE_SPACE: u32
-pub bridge const SCANCODE_A: u32
-pub bridge const SCANCODE_W: u32
-pub bridge const SCANCODE_S: u32
-pub bridge const SCANCODE_D: u32
+pub enum(u8) MouseButton {
+    Left
+    Middle
+    Right
+}
 
-// ---- mouse button constants ----
+// ---- Event payload structs ----
+// All fields are pub. timestamp is SDL event timestamp in nanoseconds.
 
-pub bridge const MOUSE_LEFT: u8
-pub bridge const MOUSE_MIDDLE: u8
-pub bridge const MOUSE_RIGHT: u8
+pub struct KeyDownEvent {
+    pub scancode: u32
+    pub repeat: bool
+    pub timestamp: u64
+}
 
-// ---- lifecycle ----
+pub struct KeyUpEvent {
+    pub scancode: u32
+    pub repeat: bool
+    pub timestamp: u64
+}
 
-pub bridge func init(flags: u32) bool
-pub bridge func quit() void
-pub bridge func getError() String
+pub struct MouseMotionEvent {
+    pub x: f32
+    pub y: f32
+    pub xrel: f32
+    pub yrel: f32
+    pub timestamp: u64
+}
 
-// ---- window ----
+pub struct MouseButtonEvent {
+    pub button: u8
+    pub down: bool
+    pub x: f32
+    pub y: f32
+    pub timestamp: u64
+}
+
+pub struct GamepadAxisEvent {
+    pub gamepad_id: u32
+    pub axis: u8
+    pub value: i16
+    pub timestamp: u64
+}
+
+pub struct GamepadButtonEvent {
+    pub gamepad_id: u32
+    pub button: u8
+    pub timestamp: u64
+}
+
+pub struct GamepadConnectedEvent {
+    pub gamepad_id: u32
+}
+
+pub struct GamepadDisconnectedEvent {
+    pub gamepad_id: u32
+}
+
+pub struct TextInputEvent {
+    pub text: String
+    pub timestamp: u64
+}
+
+pub struct WindowResizedEvent {
+    pub width: i32
+    pub height: i32
+    pub timestamp: u64
+}
+
+pub struct WindowPixelResizedEvent {
+    pub width: i32
+    pub height: i32
+    pub timestamp: u64
+}
+
+pub struct WindowCloseEvent {
+    pub timestamp: u64
+}
+
+pub struct QuitEvent {
+    pub timestamp: u64
+}
+
+// ---- RawEvent bridge struct ----
+// Internal bridge to the Zig sidecar's RawEvent struct and pollRawEvent function.
+// Not re-exported — used only by the pollEvent function below.
+
+bridge struct RawEvent {
+    bridge func create() RawEvent
+    bridge func poll(self: &RawEvent) bool
+    bridge func getTag(self: const &RawEvent) u8
+    bridge func getKeyScancode(self: const &RawEvent) u32
+    bridge func getKeyRepeat(self: const &RawEvent) bool
+    bridge func getMouseX(self: const &RawEvent) f32
+    bridge func getMouseY(self: const &RawEvent) f32
+    bridge func getMouseXRel(self: const &RawEvent) f32
+    bridge func getMouseYRel(self: const &RawEvent) f32
+    bridge func getMouseButton(self: const &RawEvent) u8
+    bridge func getMouseDown(self: const &RawEvent) bool
+    bridge func getGamepadWhich(self: const &RawEvent) u32
+    bridge func getGamepadAxis(self: const &RawEvent) u8
+    bridge func getGamepadAxisValue(self: const &RawEvent) i16
+    bridge func getGamepadButton(self: const &RawEvent) u8
+    bridge func getText(self: const &RawEvent) String
+    bridge func getWindowW(self: const &RawEvent) i32
+    bridge func getWindowH(self: const &RawEvent) i32
+    bridge func getPixelW(self: const &RawEvent) i32
+    bridge func getPixelH(self: const &RawEvent) i32
+    bridge func getTimestamp(self: const &RawEvent) u64
+}
+
+// ---- TAG constants (internal — match tamga_sdl3.zig TAG_* values) ----
+
+const TAG_NONE:                 u8 = 0
+const TAG_QUIT:                 u8 = 1
+const TAG_KEY_DOWN:             u8 = 2
+const TAG_KEY_UP:               u8 = 3
+const TAG_MOUSE_MOTION:         u8 = 4
+const TAG_MOUSE_BUTTON_DOWN:    u8 = 5
+const TAG_MOUSE_BUTTON_UP:      u8 = 6
+const TAG_GAMEPAD_AXIS:         u8 = 7
+const TAG_GAMEPAD_BUTTON_DOWN:  u8 = 8
+const TAG_GAMEPAD_BUTTON_UP:    u8 = 9
+const TAG_GAMEPAD_ADDED:        u8 = 10
+const TAG_GAMEPAD_REMOVED:      u8 = 11
+const TAG_TEXT_INPUT:           u8 = 12
+const TAG_WINDOW_RESIZED:       u8 = 13
+const TAG_WINDOW_PIXEL_RESIZED: u8 = 14
+const TAG_WINDOW_CLOSE:         u8 = 15
+
+// ---- EventKind discriminator enum ----
+// Used with Event.kind for type-safe dispatch. Fallback design per RESEARCH.md Pitfall 1 —
+// union-of-struct `is` dispatch is blocked by a compiler codegen bug (see docs/bugs.txt).
+
+pub enum(u8) EventKind {
+    None
+    Quit
+    KeyDown
+    KeyUp
+    MouseMotion
+    MouseButtonDown
+    MouseButtonUp
+    GamepadAxis
+    GamepadButtonDown
+    GamepadButtonUp
+    GamepadAdded
+    GamepadRemoved
+    TextInput
+    WindowResized
+    WindowPixelResized
+    WindowClose
+}
+
+// ---- Event struct ----
+// Tagged event container. Check `event.kind`, then access the matching payload field.
+// Only the field matching event.kind contains valid data.
+//
+// Usage:
+//   const ev = tamga_sdl3.pollEvent()
+//   if(ev is not null) {
+//       if(ev.value.kind == tamga_sdl3.EventKind.KeyDown) {
+//           const kd = ev.value.key
+//           // kd.scancode, kd.repeat, kd.timestamp
+//       }
+//   }
+
+pub struct Event {
+    pub kind: EventKind
+    pub key: KeyDownEvent
+    pub mouse_motion: MouseMotionEvent
+    pub mouse_button: MouseButtonEvent
+    pub gamepad_axis: GamepadAxisEvent
+    pub gamepad_button: GamepadButtonEvent
+    pub gamepad_id: u32
+    pub text: String
+    pub window_w: i32
+    pub window_h: i32
+    pub timestamp: u64
+}
+
+// ---- pollEvent ----
+// Polls for the next SDL3 event. Returns null when the event queue is empty.
+// Check ev.kind against EventKind.* values to determine the event type.
+// Access the matching payload field for typed data.
+
+pub func pollEvent() (null | Event) {
+    var raw = RawEvent.create()
+    if(!raw.poll()) { return null }
+    const tag = raw.getTag()
+    const ts = raw.getTimestamp()
+    if(tag == TAG_NONE) { return null }
+    if(tag == TAG_QUIT) {
+        return Event(kind: EventKind.Quit, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_KEY_DOWN) {
+        return Event(kind: EventKind.KeyDown, key: KeyDownEvent(scancode: raw.getKeyScancode(), repeat: raw.getKeyRepeat(), timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_KEY_UP) {
+        return Event(kind: EventKind.KeyUp, key: KeyDownEvent(scancode: raw.getKeyScancode(), repeat: raw.getKeyRepeat(), timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_MOUSE_MOTION) {
+        return Event(kind: EventKind.MouseMotion, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: raw.getMouseX(), y: raw.getMouseY(), xrel: raw.getMouseXRel(), yrel: raw.getMouseYRel(), timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_MOUSE_BUTTON_DOWN) {
+        return Event(kind: EventKind.MouseButtonDown, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: raw.getMouseButton(), down: true, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_MOUSE_BUTTON_UP) {
+        return Event(kind: EventKind.MouseButtonUp, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: raw.getMouseButton(), down: false, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_GAMEPAD_AXIS) {
+        return Event(kind: EventKind.GamepadAxis, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: raw.getGamepadWhich(), axis: raw.getGamepadAxis(), value: raw.getGamepadAxisValue(), timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: raw.getGamepadWhich(), text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_GAMEPAD_BUTTON_DOWN) {
+        return Event(kind: EventKind.GamepadButtonDown, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: raw.getGamepadWhich(), button: raw.getGamepadButton(), timestamp: ts), gamepad_id: raw.getGamepadWhich(), text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_GAMEPAD_BUTTON_UP) {
+        return Event(kind: EventKind.GamepadButtonUp, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: raw.getGamepadWhich(), button: raw.getGamepadButton(), timestamp: ts), gamepad_id: raw.getGamepadWhich(), text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_GAMEPAD_ADDED) {
+        return Event(kind: EventKind.GamepadAdded, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: raw.getGamepadWhich(), text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_GAMEPAD_REMOVED) {
+        return Event(kind: EventKind.GamepadRemoved, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: raw.getGamepadWhich(), text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_TEXT_INPUT) {
+        return Event(kind: EventKind.TextInput, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: raw.getText(), window_w: 0, window_h: 0, timestamp: ts)
+    }
+    if(tag == TAG_WINDOW_RESIZED) {
+        return Event(kind: EventKind.WindowResized, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: raw.getWindowW(), window_h: raw.getWindowH(), timestamp: ts)
+    }
+    if(tag == TAG_WINDOW_PIXEL_RESIZED) {
+        return Event(kind: EventKind.WindowPixelResized, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: raw.getPixelW(), window_h: raw.getPixelH(), timestamp: ts)
+    }
+    if(tag == TAG_WINDOW_CLOSE) {
+        return Event(kind: EventKind.WindowClose, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+    }
+    return null
+}
+
+// ---- Window bridge struct ----
 
 pub bridge struct Window {
     bridge func create(title: String, w: i32, h: i32, flags: u64) (Error | Window)
@@ -54,36 +348,48 @@ pub bridge struct Window {
     bridge func setTitle(self: &Window, title: String) void
     bridge func getWidth(self: const &Window) i32
     bridge func getHeight(self: const &Window) i32
-    bridge func getHandle(self: const &Window) Ptr(u8)
+    bridge func getPixelWidth(self: const &Window) i32
+    bridge func getPixelHeight(self: const &Window) i32
+    bridge func getDisplayScale(self: const &Window) f32
+    bridge func getHandle(self: const &Window) WindowHandle
+    bridge func setRelativeMouseMode(self: &Window, enabled: bool) bool
+    bridge func startTextInput(self: &Window) void
+    bridge func stopTextInput(self: &Window) void
 }
 
-// ---- renderer ----
+// ---- Lifecycle ----
+// initPlatform returns (Error | bool) — callers must handle initialization failure via error union.
+// Per D-12 and WIN-10: error union, not plain bool. Returns true on success.
+// NOTE: Orhon does not support `Unit` type in bridge return position (see docs/bugs.txt).
 
-pub bridge struct Renderer {
-    bridge func create(win: Window) (Error | Renderer)
-    bridge func destroy(self: &Renderer) void
-    bridge func clear(self: &Renderer) void
-    bridge func present(self: &Renderer) void
-    bridge func setDrawColor(self: &Renderer, r: u8, g: u8, b: u8, a: u8) void
+pub bridge func initPlatform() (Error | bool)
+pub bridge func quitPlatform() void
+pub bridge func getError() String
+
+// ---- Cursor ----
+
+pub bridge func hideCursor() void
+pub bridge func showCursor() void
+
+// ---- Gamepad ----
+
+pub bridge func openGamepad(id: u32) Ptr(u8)
+pub bridge func closeGamepad(handle: Ptr(u8)) void
+
+// ---- Display info ----
+
+pub struct DisplayInfo {
+    pub x: i32
+    pub y: i32
+    pub width: i32
+    pub height: i32
+    pub scale: f32
 }
 
-// ---- events ----
+pub bridge func getDisplayCount() i32
+pub bridge func getDisplayInfo(index: i32) DisplayInfo
 
-pub bridge struct Event {
-    bridge func create() Event
-    bridge func poll(self: &Event) bool
-    bridge func getType(self: const &Event) u32
-    bridge func getScancode(self: const &Event) u32
-    bridge func getKeyRepeat(self: const &Event) bool
-    bridge func getMouseX(self: const &Event) f32
-    bridge func getMouseY(self: const &Event) f32
-    bridge func getMouseXRel(self: const &Event) f32
-    bridge func getMouseYRel(self: const &Event) f32
-    bridge func getMouseButton(self: const &Event) u8
-    bridge func getMouseButtonDown(self: const &Event) bool
-}
+// ---- Timing ----
 
-// ---- timing ----
-
-pub bridge func getTicks() u64
-pub bridge func delay(ms: u32) void
+pub bridge func getTicksNS() u64
+pub bridge func delayNS(ns: u64) void
