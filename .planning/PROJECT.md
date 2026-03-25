@@ -12,22 +12,22 @@ Provide a complete, high-performance set of modular libraries that let an Orhon 
 
 ### Validated
 
-(None yet — ship to validate)
+- [x] Cross-platform windowing system with full SDL3 abstraction (swappable backend) — Validated in Phase 1: Platform Foundation
+- [x] Input handling (keyboard, mouse, gamepad) through the windowing abstraction — Validated in Phase 1: Platform Foundation
+- [x] All native bindings (SDL3, Vulkan) via Zig bridge only — Validated in Phase 1: Platform Foundation
+- [x] Each component is an independent library module — Validated in Phase 1: Platform Foundation (tamga_sdl3 module clean boundary)
+- [x] Easy-to-use API surface — framework should feel approachable on the user side — Validated in Phase 1: Platform Foundation (Tamga-native types, zero SDL3 leakage)
 
 ### Active
 
-- [ ] Cross-platform windowing system with full SDL3 abstraction (swappable backend)
-- [ ] Input handling (keyboard, mouse, gamepad) through the windowing abstraction
+- [ ] Dedicated Vulkan 3D renderer optimized for high performance (general optimizations only, no vendor-specific)
 - [ ] Dedicated Vulkan 3D renderer optimized for high performance (general optimizations only, no vendor-specific)
 - [ ] 3D renderer designed to support deferred rendering at the engine layer (render graph, attachment management, compute pass slots)
 - [ ] Dedicated Vulkan 2D renderer optimized for high performance
 - [ ] GUI library supporting both retained mode and immediate mode (game UI, dev tools, and standalone desktop apps)
 - [ ] Audio playback: WAV sound effects + OGG music streaming, volume control, basic mixing
 - [ ] Audio architecture designed for future expansion (spatial audio, effects, DSP)
-- [ ] All native bindings (SDL3, Vulkan) via Zig bridge only
-- [ ] Each component is an independent library module
 - [ ] Cross-platform support (Linux, Windows, macOS)
-- [ ] Easy-to-use API surface — framework should feel approachable on the user side
 
 ### Out of Scope
 
@@ -101,4 +101,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-25 after initialization*
+*Last updated: 2026-03-25 after Phase 1 completion*
