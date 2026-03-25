@@ -9,20 +9,20 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Windowing (TamgaSDL3)
 
-- [ ] **WIN-01**: User can create a window with title, size, and flags (resizable, fullscreen, borderless, Vulkan)
-- [ ] **WIN-02**: Window resize events are handled and propagated to dependent systems
-- [ ] **WIN-03**: Window close / quit events trigger clean shutdown
-- [ ] **WIN-04**: Keyboard input: key down/up events with scancodes
-- [ ] **WIN-05**: Mouse input: position, delta, button press/release
-- [ ] **WIN-06**: Gamepad/controller input via SDL3 Gamepad API
+- [x] **WIN-01**: User can create a window with title, size, and flags (resizable, fullscreen, borderless, Vulkan)
+- [x] **WIN-02**: Window resize events are handled and propagated to dependent systems
+- [x] **WIN-03**: Window close / quit events trigger clean shutdown
+- [x] **WIN-04**: Keyboard input: key down/up events with scancodes
+- [x] **WIN-05**: Mouse input: position, delta, button press/release
+- [x] **WIN-06**: Gamepad/controller input via SDL3 Gamepad API
 - [ ] **WIN-07**: Event polling loop with timing and delta time helpers
-- [ ] **WIN-08**: Cursor hide/show/lock (relative mouse mode) for 3D viewports
-- [ ] **WIN-09**: HiDPI / pixel density awareness (high pixel density flag)
-- [ ] **WIN-10**: Error propagation on initialization failure (Orhon error unions)
-- [ ] **WIN-11**: Text input events (Unicode) for GUI text fields
+- [x] **WIN-08**: Cursor hide/show/lock (relative mouse mode) for 3D viewports
+- [x] **WIN-09**: HiDPI / pixel density awareness (high pixel density flag)
+- [x] **WIN-10**: Error propagation on initialization failure (Orhon error unions)
+- [x] **WIN-11**: Text input events (Unicode) for GUI text fields
 - [ ] **WIN-12**: Full SDL3 abstraction — no SDL3 types leak above TamgaSDL3 module
 - [ ] **WIN-13**: Window handle exposed as opaque type for renderer consumption
-- [ ] **WIN-14**: Multiple monitor / display info query
+- [x] **WIN-14**: Multiple monitor / display info query
 
 ### Vulkan 3D Renderer (TamgaVK3D)
 
@@ -85,10 +85,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [ ] **XC-01**: All APIs are easy to use — complexity lives inside libraries, not in user code
 - [ ] **XC-02**: Each component is an independent library module with clean boundaries
-- [ ] **XC-03**: All native bindings via Zig bridge sidecar files only
+- [x] **XC-03**: All native bindings via Zig bridge sidecar files only
 - [ ] **XC-04**: Cross-platform: Linux, Windows, macOS
-- [ ] **XC-05**: Orhon compiler bugs logged in docs/bugs.txt, missing features in docs/ideas.txt
-- [ ] **XC-06**: No workarounds — if compiler blocks framework work, fix compiler first then return
+- [x] **XC-05**: Orhon compiler bugs logged in docs/bugs.txt, missing features in docs/ideas.txt
+- [x] **XC-06**: No workarounds — if compiler blocks framework work, fix compiler first then return
 
 ### Frame Loop
 
@@ -167,26 +167,26 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| WIN-01 | Phase 1 | Pending |
-| WIN-02 | Phase 1 | Pending |
-| WIN-03 | Phase 1 | Pending |
-| WIN-04 | Phase 1 | Pending |
-| WIN-05 | Phase 1 | Pending |
-| WIN-06 | Phase 1 | Pending |
+| WIN-01 | Phase 1 | Complete |
+| WIN-02 | Phase 1 | Complete |
+| WIN-03 | Phase 1 | Complete |
+| WIN-04 | Phase 1 | Complete |
+| WIN-05 | Phase 1 | Complete |
+| WIN-06 | Phase 1 | Complete |
 | WIN-07 | Phase 1 | Pending |
-| WIN-08 | Phase 1 | Pending |
-| WIN-09 | Phase 1 | Pending |
-| WIN-10 | Phase 1 | Pending |
-| WIN-11 | Phase 1 | Pending |
+| WIN-08 | Phase 1 | Complete |
+| WIN-09 | Phase 1 | Complete |
+| WIN-10 | Phase 1 | Complete |
+| WIN-11 | Phase 1 | Complete |
 | WIN-12 | Phase 1 | Pending |
 | WIN-13 | Phase 1 | Pending |
-| WIN-14 | Phase 1 | Pending |
+| WIN-14 | Phase 1 | Complete |
 | XC-01 | Phase 1 | Pending |
 | XC-02 | Phase 1 | Pending |
-| XC-03 | Phase 1 | Pending |
+| XC-03 | Phase 1 | Complete |
 | XC-04 | Phase 1 | Pending |
-| XC-05 | Phase 1 | Pending |
-| XC-06 | Phase 1 | Pending |
+| XC-05 | Phase 1 | Complete |
+| XC-06 | Phase 1 | Complete |
 | LOOP-01 | Phase 1 | Pending |
 | LOOP-02 | Phase 1 | Pending |
 | LOOP-03 | Phase 1 | Pending |
