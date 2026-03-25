@@ -695,9 +695,11 @@ fn recreateSwapchain(ctx: *VulkanContext) bool {
 pub const Renderer = struct {
     ctx: VulkanContext,
 
-    pub fn create(window_handle: *anyopaque, debug_mode: bool) anyerror!Renderer {
+    pub fn create(window_handle: @import("tamga_sdl3_bridge.zig").WindowHandle, debug_mode: bool) anyerror!Renderer {
         var ctx = VulkanContext{};
-        ctx.sdl_window = @ptrCast(@alignCast(window_handle));
+        // WindowHandle is a struct wrapping the raw SDL window pointer.
+        // Extract the inner handle pointer and cast to SDL_Window.
+        ctx.sdl_window = @ptrCast(@alignCast(window_handle.handle));
         ctx.debug_mode = debug_mode;
 
         // instance

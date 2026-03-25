@@ -5,11 +5,12 @@ import tamga_vk3d
 import std::console
 
 pub func run_vulkan_test() void {
-    console.println("--- Vulkan Renderer Test ---")
+    console.println("--- Vulkan Renderer Test (Typed API) ---")
 
+    // D-12, WIN-10: Error union dispatch — NOT boolean check
     const initResult = tamga_sdl3.initPlatform()
     if(initResult is Error) {
-        console.println("SDL3 init failed:")
+        console.println("Platform init failed:")
         console.println(tamga_sdl3.getError())
         return
     }
@@ -17,6 +18,7 @@ pub func run_vulkan_test() void {
 
     console.println("SDL3 init: ok")
 
+    // WIN-01: Window with Vulkan flag (8 = SDL Vulkan bit via WindowFlags)
     const winResult = tamga_sdl3.Window.create("Vulkan Test", 800, 600, 8)
     if(winResult is Error) {
         console.println("Window creation failed:")
@@ -28,10 +30,10 @@ pub func run_vulkan_test() void {
 
     console.println("Window created with Vulkan flag")
 
-    const renResult = tamga_vk3d.Renderer.create(win.getHandle().handle, true)
+    // WIN-13, D-08: Pass WindowHandle directly — no raw Ptr(u8) leakage
+    const renResult = tamga_vk3d.Renderer.create(win.getHandle(), true)
     if(renResult is Error) {
-        console.println("Vulkan renderer creation failed:")
-        console.println(renResult.Error)
+        console.println("Vulkan renderer creation failed")
         return
     }
     var ren = renResult.value
@@ -42,18 +44,23 @@ pub func run_vulkan_test() void {
 
     ren.setClearColor(0.1, 0.1, 0.15, 1.0)
 
+    // WIN-02, WIN-03, WIN-04: Typed event dispatch with EventKind
     var running: bool = true
 
     while(running) {
         const evResult = tamga_sdl3.pollEvent()
         if(evResult is not null) {
             const ev = evResult.value
+
+            // WIN-03: Quit events
             if(ev.kind == tamga_sdl3.EventKind.Quit) {
                 running = false
             }
             if(ev.kind == tamga_sdl3.EventKind.WindowClose) {
                 running = false
             }
+
+            // WIN-04: Keyboard — Escape (Scancode index 37 = Escape per tamga_sdl3 translation)
             if(ev.kind == tamga_sdl3.EventKind.KeyDown) {
                 if(ev.key.scancode == 37) {
                     running = false

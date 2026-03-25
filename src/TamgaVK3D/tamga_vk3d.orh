@@ -2,8 +2,12 @@ module tamga_vk3d
 #linkC "vulkan"
 #linkC "SDL3"
 
+import tamga_sdl3
+
 pub bridge struct Renderer {
-    bridge func create(window_handle: Ptr(u8), debug_mode: bool) (Error | Renderer)
+    // NOTE: Bridge signature uses tamga_sdl3.WindowHandle (D-08, WIN-13).
+    // If the compiler rejects cross-module types in bridge position, see docs/bugs.txt.
+    bridge func create(window_handle: tamga_sdl3.WindowHandle, debug_mode: bool) (Error | Renderer)
     bridge func destroy(self: &Renderer) void
     bridge func beginFrame(self: &Renderer) bool
     bridge func endFrame(self: &Renderer) void
