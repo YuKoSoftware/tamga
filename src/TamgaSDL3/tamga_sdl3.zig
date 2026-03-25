@@ -1,61 +1,170 @@
 const c = @cImport(@cInclude("SDL3/SDL.h"));
+const std = @import("std");
 
-// ---- init flags ----
-
-pub const INIT_VIDEO:  u32 = c.SDL_INIT_VIDEO;
-pub const INIT_AUDIO:  u32 = c.SDL_INIT_AUDIO;
-pub const INIT_EVENTS: u32 = c.SDL_INIT_EVENTS;
-
-// ---- window flags ----
-
-pub const WINDOW_FULLSCREEN:         u64 = c.SDL_WINDOW_FULLSCREEN;
-pub const WINDOW_RESIZABLE:          u64 = c.SDL_WINDOW_RESIZABLE;
-pub const WINDOW_BORDERLESS:         u64 = c.SDL_WINDOW_BORDERLESS;
-pub const WINDOW_VULKAN:             u64 = c.SDL_WINDOW_VULKAN;
-pub const WINDOW_OPENGL:             u64 = c.SDL_WINDOW_OPENGL;
-pub const WINDOW_HIGH_PIXEL_DENSITY: u64 = c.SDL_WINDOW_HIGH_PIXEL_DENSITY;
-
-// ---- event type constants ----
-
-pub const EVENT_QUIT:              u32 = c.SDL_EVENT_QUIT;
-pub const EVENT_KEY_DOWN:          u32 = c.SDL_EVENT_KEY_DOWN;
-pub const EVENT_KEY_UP:            u32 = c.SDL_EVENT_KEY_UP;
-pub const EVENT_MOUSE_MOTION:      u32 = c.SDL_EVENT_MOUSE_MOTION;
-pub const EVENT_MOUSE_BUTTON_DOWN: u32 = c.SDL_EVENT_MOUSE_BUTTON_DOWN;
-pub const EVENT_MOUSE_BUTTON_UP:   u32 = c.SDL_EVENT_MOUSE_BUTTON_UP;
-
-// ---- scancode constants ----
-
-pub const SCANCODE_ESCAPE: u32 = c.SDL_SCANCODE_ESCAPE;
-pub const SCANCODE_SPACE:  u32 = c.SDL_SCANCODE_SPACE;
-pub const SCANCODE_A:      u32 = c.SDL_SCANCODE_A;
-pub const SCANCODE_W:      u32 = c.SDL_SCANCODE_W;
-pub const SCANCODE_S:      u32 = c.SDL_SCANCODE_S;
-pub const SCANCODE_D:      u32 = c.SDL_SCANCODE_D;
-
-// ---- mouse button constants ----
-
-pub const MOUSE_LEFT:   u8 = 1;
-pub const MOUSE_MIDDLE: u8 = 2;
-pub const MOUSE_RIGHT:  u8 = 3;
-
-// ---- lifecycle ----
-
-pub fn init(flags: u32) bool {
-    return c.SDL_Init(flags);
-}
-
-pub fn quit() void {
-    c.SDL_Quit();
-}
-
-pub fn getError() []const u8 {
-    return std.mem.span(c.SDL_GetError());
-}
-
-// ---- window ----
+// ---- error type ----
 
 const SdlError = error{SdlFailed};
+
+// ---- RawEvent tag constants ----
+// Used as discriminator in RawEvent.tag — u8 so Orhon bridge can read without enums
+
+pub const TAG_NONE:                 u8 = 0;
+pub const TAG_QUIT:                 u8 = 1;
+pub const TAG_KEY_DOWN:             u8 = 2;
+pub const TAG_KEY_UP:               u8 = 3;
+pub const TAG_MOUSE_MOTION:         u8 = 4;
+pub const TAG_MOUSE_BUTTON_DOWN:    u8 = 5;
+pub const TAG_MOUSE_BUTTON_UP:      u8 = 6;
+pub const TAG_GAMEPAD_AXIS:         u8 = 7;
+pub const TAG_GAMEPAD_BUTTON_DOWN:  u8 = 8;
+pub const TAG_GAMEPAD_BUTTON_UP:    u8 = 9;
+pub const TAG_GAMEPAD_ADDED:        u8 = 10;
+pub const TAG_GAMEPAD_REMOVED:      u8 = 11;
+pub const TAG_TEXT_INPUT:           u8 = 12;
+pub const TAG_WINDOW_RESIZED:       u8 = 13;
+pub const TAG_WINDOW_PIXEL_RESIZED: u8 = 14;
+pub const TAG_WINDOW_CLOSE:         u8 = 15;
+
+// ---- RawEvent struct ----
+// Flat discriminated struct — translates SDL_Event union into primitive-only fields.
+// No SDL3 C types cross the bridge boundary.
+
+pub const RawEvent = struct {
+    tag: u8,                // discriminator: TAG_* constants above
+    key_scancode: u32,      // SDL scancode integer — Orhon layer maps to enum
+    key_repeat: bool,
+    mouse_x: f32,           // absolute cursor position
+    mouse_y: f32,
+    mouse_xrel: f32,        // relative delta since last motion event
+    mouse_yrel: f32,
+    mouse_button: u8,       // 1=left, 2=middle, 3=right
+    mouse_down: bool,
+    gamepad_which: u32,     // SDL_JoystickID cast to u32
+    gamepad_axis: u8,       // axis index
+    gamepad_axis_value: i16, // -32768..32767
+    gamepad_button: u8,     // button index
+    text: [32]u8,           // UTF-8 null-terminated text input
+    window_w: i32,          // logical dimensions (WINDOW_RESIZED)
+    window_h: i32,
+    pixel_w: i32,           // pixel dimensions (WINDOW_PIXEL_SIZE_CHANGED for HiDPI)
+    pixel_h: i32,
+    timestamp: u64,         // SDL event timestamp in nanoseconds
+};
+
+// ---- event polling ----
+
+pub fn pollRawEvent(out: *RawEvent) bool {
+    var ev: c.SDL_Event = undefined;
+    if (!c.SDL_PollEvent(&ev)) return false;
+
+    // zero-initialize all fields before filling tag-specific ones
+    out.* = std.mem.zeroes(RawEvent);
+
+    out.timestamp = ev.common.timestamp;
+
+    switch (ev.type) {
+        c.SDL_EVENT_QUIT => {
+            out.tag = TAG_QUIT;
+        },
+
+        c.SDL_EVENT_KEY_DOWN => {
+            out.tag = TAG_KEY_DOWN;
+            out.key_scancode = @intCast(ev.key.scancode);
+            out.key_repeat = ev.key.repeat;
+        },
+
+        c.SDL_EVENT_KEY_UP => {
+            out.tag = TAG_KEY_UP;
+            out.key_scancode = @intCast(ev.key.scancode);
+            out.key_repeat = ev.key.repeat;
+        },
+
+        c.SDL_EVENT_MOUSE_MOTION => {
+            out.tag = TAG_MOUSE_MOTION;
+            out.mouse_x = ev.motion.x;
+            out.mouse_y = ev.motion.y;
+            out.mouse_xrel = ev.motion.xrel;
+            out.mouse_yrel = ev.motion.yrel;
+        },
+
+        c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
+            out.tag = TAG_MOUSE_BUTTON_DOWN;
+            out.mouse_button = ev.button.button;
+            out.mouse_down = true;
+            out.mouse_x = ev.button.x;
+            out.mouse_y = ev.button.y;
+        },
+
+        c.SDL_EVENT_MOUSE_BUTTON_UP => {
+            out.tag = TAG_MOUSE_BUTTON_UP;
+            out.mouse_button = ev.button.button;
+            out.mouse_down = false;
+            out.mouse_x = ev.button.x;
+            out.mouse_y = ev.button.y;
+        },
+
+        c.SDL_EVENT_GAMEPAD_AXIS_MOTION => {
+            out.tag = TAG_GAMEPAD_AXIS;
+            out.gamepad_which = @intCast(ev.gaxis.which);
+            out.gamepad_axis = @intCast(ev.gaxis.axis);
+            out.gamepad_axis_value = ev.gaxis.value;
+        },
+
+        c.SDL_EVENT_GAMEPAD_BUTTON_DOWN => {
+            out.tag = TAG_GAMEPAD_BUTTON_DOWN;
+            out.gamepad_which = @intCast(ev.gbutton.which);
+            out.gamepad_button = @intCast(ev.gbutton.button);
+        },
+
+        c.SDL_EVENT_GAMEPAD_BUTTON_UP => {
+            out.tag = TAG_GAMEPAD_BUTTON_UP;
+            out.gamepad_which = @intCast(ev.gbutton.which);
+            out.gamepad_button = @intCast(ev.gbutton.button);
+        },
+
+        c.SDL_EVENT_GAMEPAD_ADDED => {
+            out.tag = TAG_GAMEPAD_ADDED;
+            out.gamepad_which = @intCast(ev.gdevice.which);
+        },
+
+        c.SDL_EVENT_GAMEPAD_REMOVED => {
+            out.tag = TAG_GAMEPAD_REMOVED;
+            out.gamepad_which = @intCast(ev.gdevice.which);
+        },
+
+        c.SDL_EVENT_TEXT_INPUT => {
+            out.tag = TAG_TEXT_INPUT;
+            const src = std.mem.span(ev.text.text);
+            const len = @min(src.len, out.text.len - 1);
+            @memcpy(out.text[0..len], src[0..len]);
+            out.text[len] = 0;
+        },
+
+        c.SDL_EVENT_WINDOW_RESIZED => {
+            out.tag = TAG_WINDOW_RESIZED;
+            out.window_w = ev.window.data1;
+            out.window_h = ev.window.data2;
+        },
+
+        c.SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED => {
+            out.tag = TAG_WINDOW_PIXEL_RESIZED;
+            out.pixel_w = ev.window.data1;
+            out.pixel_h = ev.window.data2;
+        },
+
+        c.SDL_EVENT_WINDOW_CLOSE_REQUESTED => {
+            out.tag = TAG_WINDOW_CLOSE;
+        },
+
+        else => {
+            out.tag = TAG_NONE;
+        },
+    }
+
+    return true;
+}
+
+// ---- Window struct ----
 
 pub const Window = struct {
     handle: *c.SDL_Window,
@@ -99,101 +208,142 @@ pub const Window = struct {
         return @intCast(h);
     }
 
+    pub fn getPixelWidth(self: *const Window) i32 {
+        var w: c_int = 0;
+        var h: c_int = 0;
+        _ = c.SDL_GetWindowSizeInPixels(self.handle, &w, &h);
+        return @intCast(w);
+    }
+
+    pub fn getPixelHeight(self: *const Window) i32 {
+        var w: c_int = 0;
+        var h: c_int = 0;
+        _ = c.SDL_GetWindowSizeInPixels(self.handle, &w, &h);
+        return @intCast(h);
+    }
+
+    pub fn getDisplayScale(self: *const Window) f32 {
+        return c.SDL_GetWindowDisplayScale(self.handle);
+    }
+
     pub fn getHandle(self: *const Window) *anyopaque {
         return @ptrCast(self.handle);
     }
-};
 
-// ---- renderer ----
-
-pub const Renderer = struct {
-    handle: *c.SDL_Renderer,
-
-    pub fn create(win: Window) anyerror!Renderer {
-        const handle = c.SDL_CreateRenderer(win.handle, null) orelse {
-            return SdlError.SdlFailed;
-        };
-        return Renderer{ .handle = handle };
+    pub fn setRelativeMouseMode(self: *const Window, enabled: bool) bool {
+        return c.SDL_SetWindowRelativeMouseMode(self.handle, enabled);
     }
 
-    pub fn destroy(self: *Renderer) void {
-        c.SDL_DestroyRenderer(self.handle);
+    pub fn startTextInput(self: *const Window) void {
+        _ = c.SDL_StartTextInput(self.handle);
     }
 
-    pub fn clear(self: *Renderer) void {
-        _ = c.SDL_RenderClear(self.handle);
-    }
-
-    pub fn present(self: *Renderer) void {
-        _ = c.SDL_RenderPresent(self.handle);
-    }
-
-    pub fn setDrawColor(self: *Renderer, r: u8, g: u8, b: u8, a: u8) void {
-        _ = c.SDL_SetRenderDrawColor(self.handle, r, g, b, a);
+    pub fn stopTextInput(self: *const Window) void {
+        _ = c.SDL_StopTextInput(self.handle);
     }
 };
 
-// ---- events ----
+// ---- cursor functions ----
 
-pub const Event = struct {
-    inner: c.SDL_Event = undefined,
+pub fn hideCursor() void {
+    _ = c.SDL_HideCursor();
+}
 
-    pub fn create() Event {
-        return Event{};
+pub fn showCursor() void {
+    _ = c.SDL_ShowCursor();
+}
+
+// ---- gamepad functions ----
+
+pub fn openGamepad(id: u32) ?*anyopaque {
+    const handle = c.SDL_OpenGamepad(@intCast(id)) orelse return null;
+    return @ptrCast(handle);
+}
+
+pub fn closeGamepad(handle: *anyopaque) void {
+    c.SDL_CloseGamepad(@ptrCast(@alignCast(handle)));
+}
+
+// ---- display info functions ----
+
+pub fn getDisplayCount() i32 {
+    var count: c_int = 0;
+    const displays = c.SDL_GetDisplays(&count);
+    if (displays != null) {
+        c.SDL_free(displays);
     }
+    return @intCast(count);
+}
 
-    pub fn poll(self: *Event) bool {
-        return c.SDL_PollEvent(&self.inner);
-    }
+pub fn getDisplayBounds(index: i32, out_x: *i32, out_y: *i32, out_w: *i32, out_h: *i32) bool {
+    var count: c_int = 0;
+    const displays = c.SDL_GetDisplays(&count) orelse return false;
+    defer c.SDL_free(displays);
 
-    pub fn getType(self: *const Event) u32 {
-        return @intCast(self.inner.type);
-    }
+    if (index < 0 or index >= count) return false;
 
-    // keyboard
-    pub fn getScancode(self: *const Event) u32 {
-        return @intCast(self.inner.key.scancode);
-    }
+    const display_id = displays[@intCast(index)];
+    var rect: c.SDL_Rect = undefined;
+    if (!c.SDL_GetDisplayBounds(display_id, &rect)) return false;
 
-    pub fn getKeyRepeat(self: *const Event) bool {
-        return self.inner.key.repeat;
-    }
+    out_x.* = @intCast(rect.x);
+    out_y.* = @intCast(rect.y);
+    out_w.* = @intCast(rect.w);
+    out_h.* = @intCast(rect.h);
+    return true;
+}
 
-    // mouse motion
-    pub fn getMouseX(self: *const Event) f32 {
-        return self.inner.motion.x;
-    }
+pub fn getDisplayContentScale(index: i32) f32 {
+    var count: c_int = 0;
+    const displays = c.SDL_GetDisplays(&count) orelse return 1.0;
+    defer c.SDL_free(displays);
 
-    pub fn getMouseY(self: *const Event) f32 {
-        return self.inner.motion.y;
-    }
+    if (index < 0 or index >= count) return 1.0;
 
-    pub fn getMouseXRel(self: *const Event) f32 {
-        return self.inner.motion.xrel;
-    }
+    const display_id = displays[@intCast(index)];
+    return c.SDL_GetDisplayContentScale(display_id);
+}
 
-    pub fn getMouseYRel(self: *const Event) f32 {
-        return self.inner.motion.yrel;
-    }
+pub fn getDisplayName(index: i32, out_buf: [*]u8, buf_len: usize) bool {
+    var count: c_int = 0;
+    const displays = c.SDL_GetDisplays(&count) orelse return false;
+    defer c.SDL_free(displays);
 
-    // mouse button
-    pub fn getMouseButton(self: *const Event) u8 {
-        return self.inner.button.button;
-    }
+    if (index < 0 or index >= count) return false;
 
-    pub fn getMouseButtonDown(self: *const Event) bool {
-        return self.inner.button.down;
+    const display_id = displays[@intCast(index)];
+    const name_ptr = c.SDL_GetDisplayName(display_id) orelse return false;
+    const name = std.mem.span(name_ptr);
+    const len = @min(name.len, buf_len - 1);
+    @memcpy(out_buf[0..len], name[0..len]);
+    out_buf[len] = 0;
+    return true;
+}
+
+// ---- lifecycle ----
+
+pub fn initPlatform() anyerror!void {
+    // Always initialize VIDEO, EVENTS, and GAMEPAD subsystems together.
+    // GAMEPAD subsystem must be initialized at startup — cannot be added later (Pitfall 4).
+    if (!c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_EVENTS | c.SDL_INIT_GAMEPAD)) {
+        return error.SdlFailed;
     }
-};
+}
+
+pub fn quitPlatform() void {
+    c.SDL_Quit();
+}
+
+pub fn getErrorMessage() []const u8 {
+    return std.mem.span(c.SDL_GetError());
+}
 
 // ---- timing ----
 
-pub fn getTicks() u64 {
-    return c.SDL_GetTicks();
+pub fn getTicksNS() u64 {
+    return c.SDL_GetTicksNS();
 }
 
-pub fn delay(ms: u32) void {
-    c.SDL_Delay(ms);
+pub fn delayNS(ns: u64) void {
+    c.SDL_DelayNS(ns);
 }
-
-const std = @import("std");
