@@ -15,13 +15,13 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **WIN-04**: Keyboard input: key down/up events with scancodes
 - [x] **WIN-05**: Mouse input: position, delta, button press/release
 - [x] **WIN-06**: Gamepad/controller input via SDL3 Gamepad API
-- [ ] **WIN-07**: Event polling loop with timing and delta time helpers
+- [x] **WIN-07**: Event polling loop with timing and delta time helpers
 - [x] **WIN-08**: Cursor hide/show/lock (relative mouse mode) for 3D viewports
 - [x] **WIN-09**: HiDPI / pixel density awareness (high pixel density flag)
 - [x] **WIN-10**: Error propagation on initialization failure (Orhon error unions)
 - [x] **WIN-11**: Text input events (Unicode) for GUI text fields
-- [ ] **WIN-12**: Full SDL3 abstraction — no SDL3 types leak above TamgaSDL3 module
-- [ ] **WIN-13**: Window handle exposed as opaque type for renderer consumption
+- [x] **WIN-12**: Full SDL3 abstraction — no SDL3 types leak above TamgaSDL3 module
+- [x] **WIN-13**: Window handle exposed as opaque type for renderer consumption
 - [x] **WIN-14**: Multiple monitor / display info query
 
 ### Vulkan 3D Renderer (TamgaVK3D)
@@ -83,10 +83,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Cross-Cutting
 
-- [ ] **XC-01**: All APIs are easy to use — complexity lives inside libraries, not in user code
-- [ ] **XC-02**: Each component is an independent library module with clean boundaries
+- [x] **XC-01**: All APIs are easy to use — complexity lives inside libraries, not in user code
+- [x] **XC-02**: Each component is an independent library module with clean boundaries
 - [x] **XC-03**: All native bindings via Zig bridge sidecar files only
-- [ ] **XC-04**: Cross-platform: Linux, Windows, macOS
+- [x] **XC-04**: Cross-platform: Linux, Windows, macOS
 - [x] **XC-05**: Orhon compiler bugs logged in docs/bugs.txt, missing features in docs/ideas.txt
 - [x] **XC-06**: No workarounds — if compiler blocks framework work, fix compiler first then return
 
@@ -173,18 +173,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WIN-04 | Phase 1 | Complete |
 | WIN-05 | Phase 1 | Complete |
 | WIN-06 | Phase 1 | Complete |
-| WIN-07 | Phase 1 | Pending |
+| WIN-07 | Phase 1 | Complete |
 | WIN-08 | Phase 1 | Complete |
 | WIN-09 | Phase 1 | Complete |
 | WIN-10 | Phase 1 | Complete |
 | WIN-11 | Phase 1 | Complete |
-| WIN-12 | Phase 1 | Pending |
-| WIN-13 | Phase 1 | Pending |
+| WIN-12 | Phase 1 | Complete |
+| WIN-13 | Phase 1 | Complete |
 | WIN-14 | Phase 1 | Complete |
-| XC-01 | Phase 1 | Pending |
-| XC-02 | Phase 1 | Pending |
+| XC-01 | Phase 1 | Complete |
+| XC-02 | Phase 1 | Complete |
 | XC-03 | Phase 1 | Complete |
-| XC-04 | Phase 1 | Pending |
+| XC-04 | Phase 1 | Complete |
 | XC-05 | Phase 1 | Complete |
 | XC-06 | Phase 1 | Complete |
 | LOOP-01 | Phase 1 | Pending |

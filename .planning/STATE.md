@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 01-platform-foundation plan 01 (tamga_sdl3.zig bridge rewrite)
-last_updated: "2026-03-25T19:25:01.404Z"
+stopped_at: Completed 01-platform-foundation plan 02 (tamga_sdl3.orh Tamga-native API rewrite)
+last_updated: "2026-03-25T19:51:53.117Z"
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-25)
 ## Current Position
 
 Phase: 01 (platform-foundation) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -47,6 +47,7 @@ Plan: 2 of 3
 
 *Updated after each plan completion*
 | Phase 01-platform-foundation P01 | 2 | 1 tasks | 1 files |
+| Phase 01-platform-foundation P02 | 23min | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -62,6 +63,10 @@ Recent decisions affecting current work:
 - [Research]: Font atlas strategy (bitmap vs SDF) must be decided before Phase 4 pipeline design
 - [Phase 01-platform-foundation]: initPlatform always inits VIDEO | EVENTS | GAMEPAD together — GAMEPAD cannot be added post-init (SDL3 constraint)
 - [Phase 01-platform-foundation]: RawEvent uses u8 tag constants (not Zig enum) so Orhon bridge reads tag as plain integer without cast
+- [Phase 01-platform-foundation]: EventKind enum + flat Event struct used for dispatch — union-of-structs  blocked by compiler codegen bug for cross-module types
+- [Phase 01-platform-foundation]: WindowHandle is a struct wrapper (not type alias) — pub type alias syntax not yet supported by Orhon compiler
+- [Phase 01-platform-foundation]: initPlatform returns (Error | bool) not (Error | Unit) — Unit type not recognized in bridge return position
+- [Phase 01-platform-foundation]: Scancode enum uses sequential indices 0..64 with SDL3 scancode translation table in tamga_sdl3.zig — explicit enum integer values not supported by compiler
 
 ### Pending Todos
 
@@ -75,6 +80,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T19:25:01.402Z
-Stopped at: Completed 01-platform-foundation plan 01 (tamga_sdl3.zig bridge rewrite)
+Last session: 2026-03-25T19:51:53.113Z
+Stopped at: Completed 01-platform-foundation plan 02 (tamga_sdl3.orh Tamga-native API rewrite)
 Resume file: None

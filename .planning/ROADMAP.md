@@ -34,7 +34,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 1/3 plans executed
 Plans:
 - [x] 01-01-PLAN.md — Rewrite Zig sidecar: RawEvent translator and complete SDL3 bridge
-- [ ] 01-02-PLAN.md — Rewrite Orhon public API: Tamga-native types, typed events, WindowHandle
+- [x] 01-02-PLAN.md — Rewrite Orhon public API: Tamga-native types, typed events, WindowHandle
 - [ ] 01-03-PLAN.md — Frame loop, VK3D WindowHandle update, and integration tests
 
 ### Phase 2: Vulkan 3D Renderer
