@@ -88,8 +88,9 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260326-h4x | Remove compiler bug workarounds from Phase 1 code | 2026-03-26 | 65a0657 | [260326-h4x-remove-compiler-bug-workarounds-from-pha](./quick/260326-h4x-remove-compiler-bug-workarounds-from-pha/) |
+| 260326-iez | Restructure framework into static libraries v0.1.0 | 2026-03-26 | 32b7d2b | [260326-iez-restructure-framework-into-static-librar](./quick/260326-iez-restructure-framework-into-static-librar/) |
 
 ## Session Continuity
 
-Last activity: 2026-03-26 - Completed quick task 260326-h4x: Remove compiler bug workarounds from Phase 1 code
+Last activity: 2026-03-26 - Completed quick task 260326-iez: Restructure framework into static libraries
 Resume file: .planning/phases/02-vulkan-3d-renderer/02-CONTEXT.md
