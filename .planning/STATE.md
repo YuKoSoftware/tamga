@@ -64,10 +64,12 @@ Recent decisions affecting current work:
 - [Research]: Font atlas strategy (bitmap vs SDF) must be decided before Phase 4 pipeline design
 - [Phase 01-platform-foundation]: initPlatform always inits VIDEO | EVENTS | GAMEPAD together — GAMEPAD cannot be added post-init (SDL3 constraint)
 - [Phase 01-platform-foundation]: RawEvent uses u8 tag constants (not Zig enum) so Orhon bridge reads tag as plain integer without cast
-- [Phase 01-platform-foundation]: EventKind enum + flat Event struct used for dispatch — union-of-structs  blocked by compiler codegen bug for cross-module types
-- [Phase 01-platform-foundation]: WindowHandle is a struct wrapper (not type alias) — pub type alias syntax not yet supported by Orhon compiler
-- [Phase 01-platform-foundation]: initPlatform returns (Error | bool) not (Error | Unit) — Unit type not recognized in bridge return position
-- [Phase 01-platform-foundation]: Scancode enum uses sequential indices 0..64 with SDL3 scancode translation table in tamga_sdl3.zig — explicit enum integer values not supported by compiler
+- [Quick 260326-h4x]: Event type is now a union-of-structs with `is` dispatch — EventKind enum removed
+- [Quick 260326-h4x]: WindowHandle is `pub const WindowHandle: type = Ptr(u8)` — type alias, not wrapper struct
+- [Quick 260326-h4x]: initPlatform returns `(Error | void)` — not bool
+- [Quick 260326-h4x]: Scancode/MouseButton enums use real SDL3 integer values — translation table removed
+- [Quick 260326-h4x]: pollEvent uses NoEvent sentinel (not null) — `(null | MultiUnion)` codegen broken
+- [Quick 260326-h4x]: scancode/button fields stay u32/u8 — `cast(Enum, int)` codegen broken
 - [Phase 01-platform-foundation]: cross-module bridge type refs work when import is present: tamga_sdl3.WindowHandle in bridge sig compiles with import tamga_sdl3 at top
 - [Phase 01-platform-foundation]: VK3D Zig sidecar must import tamga_sdl3_bridge.zig (not tamga_sdl3.zig) for WindowHandle type identity — Orhon generates values from bridge types
 
@@ -81,8 +83,13 @@ None yet.
 - [Research flag]: Phase 4 needs deeper research during planning — sprite batching strategy, font atlas approach, draw list format for GUI
 - [Research flag]: Phase 5 needs research — font atlas library choice, unified immediate/retained API feasibility in Orhon's type system
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260326-h4x | Remove compiler bug workarounds from Phase 1 code | 2026-03-26 | 65a0657 | [260326-h4x-remove-compiler-bug-workarounds-from-pha](./quick/260326-h4x-remove-compiler-bug-workarounds-from-pha/) |
+
 ## Session Continuity
 
-Last session: 2026-03-25T20:01:04.968Z
-Stopped at: Completed 01-platform-foundation plan 03 (frame loop, VK3D WindowHandle, integration tests)
+Last activity: 2026-03-26 - Completed quick task 260326-h4x: Remove compiler bug workarounds from Phase 1 code
 Resume file: None
