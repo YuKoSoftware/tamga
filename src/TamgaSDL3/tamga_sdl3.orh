@@ -1,4 +1,8 @@
 module tamga_sdl3
+
+#name    = "tamga_sdl3"
+#version = Version(0, 1, 0)
+#build   = static
 #linkC "SDL3"
 
 // ---- WindowHandle type alias ----
