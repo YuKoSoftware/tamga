@@ -44,25 +44,27 @@ pub func run_vulkan_test() void {
 
     ren.setClearColor(0.1, 0.1, 0.15, 1.0)
 
-    // WIN-02, WIN-03, WIN-04: Typed event dispatch with EventKind
+    // WIN-02, WIN-03, WIN-04: Typed event dispatch with `is` operator
     var running: bool = true
 
     while(running) {
-        const evResult = tamga_sdl3.pollEvent()
-        if(evResult is not null) {
-            const ev = evResult.value
+        const ev = tamga_sdl3.pollEvent()
+        if(ev is not tamga_sdl3.NoEvent) {
 
             // WIN-03: Quit events
-            if(ev.kind == tamga_sdl3.EventKind.Quit) {
+            if(ev is tamga_sdl3.QuitEvent) {
                 running = false
             }
-            if(ev.kind == tamga_sdl3.EventKind.WindowClose) {
+            if(ev is tamga_sdl3.WindowCloseEvent) {
                 running = false
             }
 
-            // WIN-04: Keyboard — Escape (Scancode index 37 = Escape per tamga_sdl3 translation)
-            if(ev.kind == tamga_sdl3.EventKind.KeyDown) {
-                if(ev.key.scancode == 37) {
+            // WIN-04: Keyboard — Escape scancode (SDL3 = 41)
+            // NOTE: scancode is u32 because cast(Enum, int) is currently broken.
+            // Compare against Scancode.Escape integer value directly.
+            if(ev is tamga_sdl3.KeyDownEvent) {
+                const kd = ev.value
+                if(kd.scancode == 41) {
                     running = false
                 }
             }
