@@ -697,9 +697,8 @@ pub const Renderer = struct {
 
     pub fn create(window_handle: @import("tamga_sdl3_bridge.zig").WindowHandle, debug_mode: bool) anyerror!Renderer {
         var ctx = VulkanContext{};
-        // WindowHandle is a struct wrapping the raw SDL window pointer.
-        // Extract the inner handle pointer and cast to SDL_Window.
-        ctx.sdl_window = @ptrCast(@alignCast(window_handle.handle));
+        // WindowHandle is now a plain *anyopaque pointer (type alias).
+        ctx.sdl_window = @ptrCast(@alignCast(window_handle));
         ctx.debug_mode = debug_mode;
 
         // instance

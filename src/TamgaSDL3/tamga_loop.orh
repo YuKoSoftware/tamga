@@ -20,6 +20,9 @@ pub struct LoopConfig {
     pub on_render: func(f64) void
 }
 
+// Re-export Event type alias for callers
+pub const LoopEvent: type = Event
+
 // ---- Loop ----
 // Fixed-timestep game loop with variable render.
 //
@@ -75,15 +78,14 @@ pub struct Loop {
 
             // Poll and dispatch all queued events
             while(true) {
-                const evResult = pollEvent()
-                if(evResult is null) { break }
-                const ev = evResult.value
+                const ev = pollEvent()
+                if(ev is NoEvent) { break }
 
                 // Auto-quit on platform-level quit or window close
-                if(ev.kind == EventKind.Quit) {
+                if(ev is QuitEvent) {
                     self.running = false
                 }
-                if(ev.kind == EventKind.WindowClose) {
+                if(ev is WindowCloseEvent) {
                     self.running = false
                 }
 

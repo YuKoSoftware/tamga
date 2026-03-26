@@ -1,15 +1,11 @@
 module tamga_sdl3
 #linkC "SDL3"
 
-// ---- WindowHandle opaque type ----
-// Named opaque wrapper around the raw SDL window pointer.
+// ---- WindowHandle type alias ----
+// Named alias for the raw SDL window pointer.
 // Downstream modules import this type and never dereference or cast it.
-// NOTE: `pub type Alias = T` not yet supported by compiler (see docs/bugs.txt).
-// Using wrapper struct as temporary workaround — the handle field is the opaque pointer.
 
-pub struct WindowHandle {
-    pub handle: Ptr(u8)
-}
+pub const WindowHandle: type = Ptr(u8)
 
 // ---- WindowFlags bitfield ----
 // Replaces raw u64 SDL3 constants. Callers use: WindowFlags(Resizable, Vulkan)
@@ -23,92 +19,94 @@ pub bitfield(u64) WindowFlags {
 }
 
 // ---- Scancode enum ----
-// Tamga-native key identifiers. Sequential values (not SDL3 integers).
-// NOTE: Orhon enums do not support explicit per-variant integer values (see docs/bugs.txt).
-// Translation from SDL3 scancodes to these sequential indices happens in tamga_sdl3.zig.
-// The order here MUST match the SDL3_TO_SCANCODE table in tamga_sdl3.zig.
+// SDL3 scancode integers as explicit enum values.
 
 pub enum(u32) Scancode {
-    A
-    B
-    C
-    D
-    E
-    F
-    G
-    H
-    I
-    J
-    K
-    L
-    M
-    N
-    O
-    P
-    Q
-    R
-    S
-    T
-    U
-    V
-    W
-    X
-    Y
-    Z
-    Num1
-    Num2
-    Num3
-    Num4
-    Num5
-    Num6
-    Num7
-    Num8
-    Num9
-    Num0
-    Return
-    Escape
-    Backspace
-    Tab
-    Space
-    F1
-    F2
-    F3
-    F4
-    F5
-    F6
-    F7
-    F8
-    F9
-    F10
-    F11
-    F12
-    Delete
-    Right
-    Left
-    Down
-    Up
-    LCtrl
-    LShift
-    LAlt
-    RCtrl
-    RShift
-    RAlt
-    Unknown
+    A = 4
+    B = 5
+    C = 6
+    D = 7
+    E = 8
+    F = 9
+    G = 10
+    H = 11
+    I = 12
+    J = 13
+    K = 14
+    L = 15
+    M = 16
+    N = 17
+    O = 18
+    P = 19
+    Q = 20
+    R = 21
+    S = 22
+    T = 23
+    U = 24
+    V = 25
+    W = 26
+    X = 27
+    Y = 28
+    Z = 29
+    Num1 = 30
+    Num2 = 31
+    Num3 = 32
+    Num4 = 33
+    Num5 = 34
+    Num6 = 35
+    Num7 = 36
+    Num8 = 37
+    Num9 = 38
+    Num0 = 39
+    Return = 40
+    Escape = 41
+    Backspace = 42
+    Tab = 43
+    Space = 44
+    F1 = 58
+    F2 = 59
+    F3 = 60
+    F4 = 61
+    F5 = 62
+    F6 = 63
+    F7 = 64
+    F8 = 65
+    F9 = 66
+    F10 = 67
+    F11 = 68
+    F12 = 69
+    Delete = 76
+    Right = 79
+    Left = 80
+    Down = 81
+    Up = 82
+    LCtrl = 224
+    LShift = 225
+    LAlt = 226
+    RCtrl = 228
+    RShift = 229
+    RAlt = 230
+    Unknown = 0
 }
 
 // ---- MouseButton enum ----
-// Sequential values: Left=0, Middle=1, Right=2.
-// NOTE: SDL3 uses 1/2/3 internally; translation to 0/1/2 happens in tamga_sdl3.zig pollRawEvent.
-// See docs/bugs.txt — explicit enum integer values not supported by compiler.
+// SDL3 button values: Left=1, Middle=2, Right=3.
 
 pub enum(u8) MouseButton {
-    Left
-    Middle
-    Right
+    Left = 1
+    Middle = 2
+    Right = 3
 }
 
 // ---- Event payload structs ----
 // All fields are pub. timestamp is SDL event timestamp in nanoseconds.
+
+// NOTE: scancode and button fields use u32/u8 (raw integer) rather than Scancode/MouseButton
+// enum types. `cast(Enum, int)` codegen is currently broken in the Orhon compiler
+// (generates @intCast instead of @enumFromInt). See docs/bugs.txt.
+// Callers compare directly against Scancode enum values via integer comparison:
+//   kd.scancode == cast(u32, tamga_sdl3.Scancode.Escape)
+// Once fixed, these fields will use Scancode and MouseButton types directly.
 
 pub struct KeyDownEvent {
     pub scancode: u32
@@ -231,113 +229,90 @@ const TAG_WINDOW_RESIZED:       u8 = 13
 const TAG_WINDOW_PIXEL_RESIZED: u8 = 14
 const TAG_WINDOW_CLOSE:         u8 = 15
 
-// ---- EventKind discriminator enum ----
-// Used with Event.kind for type-safe dispatch. Fallback design per RESEARCH.md Pitfall 1 —
-// union-of-struct `is` dispatch is blocked by a compiler codegen bug (see docs/bugs.txt).
+// ---- NoEvent sentinel ----
+// Returned by pollEvent when the event queue is empty.
+// Callers check: `if(ev is not NoEvent) { ... }`
+// NOTE: empty struct construction `NoEvent()` has a codegen bug — using a dummy field.
+// See docs/bugs.txt.
 
-pub enum(u8) EventKind {
-    None
-    Quit
-    KeyDown
-    KeyUp
-    MouseMotion
-    MouseButtonDown
-    MouseButtonUp
-    GamepadAxis
-    GamepadButtonDown
-    GamepadButtonUp
-    GamepadAdded
-    GamepadRemoved
-    TextInput
-    WindowResized
-    WindowPixelResized
-    WindowClose
+pub struct NoEvent {
+    pub empty: bool
 }
 
-// ---- Event struct ----
-// Tagged event container. Check `event.kind`, then access the matching payload field.
-// Only the field matching event.kind contains valid data.
+// ---- Event type alias ----
+// Union-of-structs event type. Use `is` dispatch to determine the active variant.
 //
 // Usage:
 //   const ev = tamga_sdl3.pollEvent()
-//   if(ev is not null) {
-//       if(ev.value.kind == tamga_sdl3.EventKind.KeyDown) {
-//           const kd = ev.value.key
+//   if(ev is not tamga_sdl3.NoEvent) {
+//       if(ev is tamga_sdl3.KeyDownEvent) {
+//           const kd = ev.value
 //           // kd.scancode, kd.repeat, kd.timestamp
 //       }
 //   }
+//
+// NOTE: (null | MultiUnion) codegen is not yet supported by the compiler — null sentinel
+// variant `NoEvent` is used instead. See docs/bugs.txt.
 
-pub struct Event {
-    pub kind: EventKind
-    pub key: KeyDownEvent
-    pub mouse_motion: MouseMotionEvent
-    pub mouse_button: MouseButtonEvent
-    pub gamepad_axis: GamepadAxisEvent
-    pub gamepad_button: GamepadButtonEvent
-    pub gamepad_id: u32
-    pub text: String
-    pub window_w: i32
-    pub window_h: i32
-    pub timestamp: u64
-}
+pub const Event: type = (NoEvent | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent)
 
 // ---- pollEvent ----
-// Polls for the next SDL3 event. Returns null when the event queue is empty.
-// Check ev.kind against EventKind.* values to determine the event type.
-// Access the matching payload field for typed data.
+// Polls for the next SDL3 event.
+// Returns NoEvent when the event queue is empty.
+// Use `is` dispatch on the result to determine the event type.
 
-pub func pollEvent() (null | Event) {
+pub func pollEvent() (NoEvent | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent) {
     var raw = RawEvent.create()
-    if(!raw.poll()) { return null }
+    if(!raw.poll()) { return NoEvent(empty: false) }
     const tag = raw.getTag()
     const ts = raw.getTimestamp()
-    if(tag == TAG_NONE) { return null }
+    if(tag == TAG_NONE) { return NoEvent(empty: false) }
     if(tag == TAG_QUIT) {
-        return Event(kind: EventKind.Quit, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return QuitEvent(timestamp: ts)
     }
     if(tag == TAG_KEY_DOWN) {
-        return Event(kind: EventKind.KeyDown, key: KeyDownEvent(scancode: raw.getKeyScancode(), repeat: raw.getKeyRepeat(), timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return KeyDownEvent(scancode: raw.getKeyScancode(), repeat: raw.getKeyRepeat(), timestamp: ts)
     }
     if(tag == TAG_KEY_UP) {
-        return Event(kind: EventKind.KeyUp, key: KeyDownEvent(scancode: raw.getKeyScancode(), repeat: raw.getKeyRepeat(), timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return KeyUpEvent(scancode: raw.getKeyScancode(), repeat: raw.getKeyRepeat(), timestamp: ts)
     }
     if(tag == TAG_MOUSE_MOTION) {
-        return Event(kind: EventKind.MouseMotion, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: raw.getMouseX(), y: raw.getMouseY(), xrel: raw.getMouseXRel(), yrel: raw.getMouseYRel(), timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return MouseMotionEvent(x: raw.getMouseX(), y: raw.getMouseY(), xrel: raw.getMouseXRel(), yrel: raw.getMouseYRel(), timestamp: ts)
     }
     if(tag == TAG_MOUSE_BUTTON_DOWN) {
-        return Event(kind: EventKind.MouseButtonDown, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: raw.getMouseButton(), down: true, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return MouseButtonEvent(button: raw.getMouseButton(), down: true, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
     }
     if(tag == TAG_MOUSE_BUTTON_UP) {
-        return Event(kind: EventKind.MouseButtonUp, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: raw.getMouseButton(), down: false, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return MouseButtonEvent(button: raw.getMouseButton(), down: false, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
     }
     if(tag == TAG_GAMEPAD_AXIS) {
-        return Event(kind: EventKind.GamepadAxis, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: raw.getGamepadWhich(), axis: raw.getGamepadAxis(), value: raw.getGamepadAxisValue(), timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: raw.getGamepadWhich(), text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return GamepadAxisEvent(gamepad_id: raw.getGamepadWhich(), axis: raw.getGamepadAxis(), value: raw.getGamepadAxisValue(), timestamp: ts)
     }
     if(tag == TAG_GAMEPAD_BUTTON_DOWN) {
-        return Event(kind: EventKind.GamepadButtonDown, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: raw.getGamepadWhich(), button: raw.getGamepadButton(), timestamp: ts), gamepad_id: raw.getGamepadWhich(), text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return GamepadButtonEvent(gamepad_id: raw.getGamepadWhich(), button: raw.getGamepadButton(), timestamp: ts)
     }
     if(tag == TAG_GAMEPAD_BUTTON_UP) {
-        return Event(kind: EventKind.GamepadButtonUp, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: raw.getGamepadWhich(), button: raw.getGamepadButton(), timestamp: ts), gamepad_id: raw.getGamepadWhich(), text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return GamepadButtonEvent(gamepad_id: raw.getGamepadWhich(), button: raw.getGamepadButton(), timestamp: ts)
     }
     if(tag == TAG_GAMEPAD_ADDED) {
-        return Event(kind: EventKind.GamepadAdded, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: raw.getGamepadWhich(), text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return GamepadConnectedEvent(gamepad_id: raw.getGamepadWhich())
     }
     if(tag == TAG_GAMEPAD_REMOVED) {
-        return Event(kind: EventKind.GamepadRemoved, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: raw.getGamepadWhich(), text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return GamepadDisconnectedEvent(gamepad_id: raw.getGamepadWhich())
     }
     if(tag == TAG_TEXT_INPUT) {
-        return Event(kind: EventKind.TextInput, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: raw.getText(), window_w: 0, window_h: 0, timestamp: ts)
+        return TextInputEvent(text: raw.getText(), timestamp: ts)
     }
     if(tag == TAG_WINDOW_RESIZED) {
-        return Event(kind: EventKind.WindowResized, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: raw.getWindowW(), window_h: raw.getWindowH(), timestamp: ts)
+        return WindowResizedEvent(width: raw.getWindowW(), height: raw.getWindowH(), timestamp: ts)
     }
     if(tag == TAG_WINDOW_PIXEL_RESIZED) {
-        return Event(kind: EventKind.WindowPixelResized, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: raw.getPixelW(), window_h: raw.getPixelH(), timestamp: ts)
+        return WindowPixelResizedEvent(width: raw.getPixelW(), height: raw.getPixelH(), timestamp: ts)
     }
     if(tag == TAG_WINDOW_CLOSE) {
-        return Event(kind: EventKind.WindowClose, key: KeyDownEvent(scancode: 0, repeat: false, timestamp: ts), mouse_motion: MouseMotionEvent(x: 0.0, y: 0.0, xrel: 0.0, yrel: 0.0, timestamp: ts), mouse_button: MouseButtonEvent(button: 0, down: false, x: 0.0, y: 0.0, timestamp: ts), gamepad_axis: GamepadAxisEvent(gamepad_id: 0, axis: 0, value: 0, timestamp: ts), gamepad_button: GamepadButtonEvent(gamepad_id: 0, button: 0, timestamp: ts), gamepad_id: 0, text: "", window_w: 0, window_h: 0, timestamp: ts)
+        return WindowCloseEvent(timestamp: ts)
     }
-    return null
+    return NoEvent(empty: false)
 }
 
 // ---- Window bridge struct ----
@@ -358,11 +333,9 @@ pub bridge struct Window {
 }
 
 // ---- Lifecycle ----
-// initPlatform returns (Error | bool) — callers must handle initialization failure via error union.
-// Per D-12 and WIN-10: error union, not plain bool. Returns true on success.
-// NOTE: Orhon does not support `Unit` type in bridge return position (see docs/bugs.txt).
+// initPlatform returns (Error | void) — callers handle initialization failure via error union.
 
-pub bridge func initPlatform() (Error | bool)
+pub bridge func initPlatform() (Error | void)
 pub bridge func quitPlatform() void
 pub bridge func getError() String
 
