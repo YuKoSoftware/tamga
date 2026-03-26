@@ -1,0 +1,63 @@
+module tamga_vma
+
+#name    = "tamga_vma"
+#version = Version(0, 1, 0)
+#build   = static
+#linkC "vulkan"
+
+// ---- BufferAlloc ----
+// Returned by Allocator.createBuffer. Both fields are opaque pointers.
+// buffer: the Vulkan buffer handle (VkBuffer)
+// allocation: the VMA allocation handle (VmaAllocation)
+
+pub struct BufferAlloc {
+    pub buffer: Ptr(u8)
+    pub allocation: Ptr(u8)
+}
+
+// ---- StagingRegion ----
+// Returned by Allocator.stagingWrite.
+// buffer: the staging buffer (VkBuffer) — may be the ring buffer or a one-shot allocation
+// offset: byte offset within that buffer where the written data starts
+
+pub struct StagingRegion {
+    pub buffer: Ptr(u8)
+    pub offset: u32
+}
+
+// ---- Allocator ----
+// VMA-backed GPU memory allocator.
+// Wraps a VmaAllocator handle + 16MB ring buffer staging area.
+//
+// Usage:
+//   const alloc = tamga_vma.Allocator.create(instance, physical_device, device)!
+//   defer alloc.destroy()
+//   const buf = alloc.createBuffer(size, usage, true)!  // gpu_only = true
+//   alloc.destroyBuffer(buf.buffer, buf.allocation)
+
+pub bridge struct Allocator {
+    // create initialises VMA and the 16MB persistently-mapped staging ring buffer.
+    // instance, physical_device, device: Vulkan handles passed as Ptr(u8) — opaque
+    // across the bridge, cast to VkInstance/VkPhysicalDevice/VkDevice in the Zig sidecar.
+    bridge func create(instance: Ptr(u8), physical_device: Ptr(u8), device: Ptr(u8)) (Error | Allocator)
+
+    // destroy tears down the staging buffer then the VMA allocator.
+    bridge func destroy(self: &Allocator) void
+
+    // createBuffer allocates a GPU buffer via VMA suballocation.
+    // size: byte size of the buffer
+    // usage: VkBufferUsageFlags (e.g. VERTEX_BUFFER | TRANSFER_DST)
+    // gpu_only: true = device-local (no CPU access); false = host-accessible (UBOs, readback)
+    bridge func createBuffer(self: &Allocator, byte_size: u64, usage: u32, gpu_only: bool) (Error | BufferAlloc)
+
+    // destroyBuffer releases a buffer and its VMA allocation.
+    // buffer: VkBuffer handle (from BufferAlloc.buffer)
+    // allocation: VmaAllocation handle (from BufferAlloc.allocation)
+    bridge func destroyBuffer(self: &Allocator, buffer: Ptr(u8), allocation: Ptr(u8)) void
+
+    // stagingWrite copies data into the 16MB ring buffer and returns the region.
+    // The caller uses StagingRegion.buffer / .offset in a vkCmdCopyBuffer to transfer
+    // to a device-local buffer. Ring wraps automatically; oversized uploads use a
+    // one-shot allocation and print a debug warning.
+    bridge func stagingWrite(self: &Allocator, data: Ptr(u8), byte_count: u32) (Error | StagingRegion)
+}
