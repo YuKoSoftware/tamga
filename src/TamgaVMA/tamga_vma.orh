@@ -1,7 +1,7 @@
 module tamga_vma
 
 #name    = "tamga_vma"
-#version = Version(0, 1, 0)
+#version = Version(0, 1, 1)
 #build   = static
 #linkC "vulkan"
 

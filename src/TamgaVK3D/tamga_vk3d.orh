@@ -1,7 +1,7 @@
 module tamga_vk3d
 
 #name    = "tamga_vk3d"
-#version = Version(0, 1, 0)
+#version = Version(0, 1, 1)
 #build   = static
 #linkC "vulkan"
 #linkC "SDL3"
