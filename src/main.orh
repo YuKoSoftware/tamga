@@ -3,7 +3,6 @@ module main
 #name    = "tamga_test"
 #version = Version(0, 1, 0)
 #build   = exe
-#bitsize = 32
 
 func main() void {
     run_vulkan_test()
