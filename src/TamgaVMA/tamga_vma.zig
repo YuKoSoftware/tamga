@@ -11,7 +11,7 @@ const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 // cannot be included via @cImport).
 
 const VmaAllocator = *anyopaque;
-const VmaAllocation = *anyopaque;
+pub const VmaAllocation = *anyopaque;
 const VmaPool = *anyopaque;
 
 // VMA allocation create flags
@@ -289,6 +289,21 @@ pub const VmaContext = struct {
 
     pub fn destroyBuffer(self: *VmaContext, buffer: c.VkBuffer, allocation: VmaAllocation) void {
         vmaDestroyBuffer(self.allocator, buffer, allocation);
+    }
+
+    // mapBuffer maps a host-accessible buffer into CPU address space.
+    // Only valid for buffers created with gpu_only = false.
+    // Returns a byte pointer to the mapped memory or null on failure.
+    pub fn mapBuffer(self: *VmaContext, allocation: VmaAllocation) ?[*]u8 {
+        var mapped_raw: ?*anyopaque = null;
+        const result = vmaMapMemory(self.allocator, allocation, &mapped_raw);
+        if (result != c.VK_SUCCESS) return null;
+        return @ptrCast(mapped_raw.?);
+    }
+
+    // unmapBuffer unmaps a previously mapped buffer allocation.
+    pub fn unmapBuffer(self: *VmaContext, allocation: VmaAllocation) void {
+        vmaUnmapMemory(self.allocator, allocation);
     }
 
     // stagingWrite copies data into the ring buffer at the current offset.

@@ -1,4 +1,5 @@
 const std = @import("std");
+const vma = @import("tamga_vma_bridge.zig");
 const c = @cImport({
     @cInclude("vulkan/vulkan.h");
     @cInclude("SDL3/SDL.h");
@@ -27,7 +28,7 @@ const RenderGraph = struct {
         render_pass: c.VkRenderPass,
         framebuffer: c.VkFramebuffer,
         extent: c.VkExtent2D,
-        clear_color: c.VkClearValue,
+        clear_values: []const c.VkClearValue,
     ) void {
         _ = self;
 
@@ -40,12 +41,12 @@ const RenderGraph = struct {
                 .offset = .{ .x = 0, .y = 0 },
                 .extent = extent,
             },
-            .clearValueCount = 1,
-            .pClearValues = &clear_color,
+            .clearValueCount = @intCast(clear_values.len),
+            .pClearValues = clear_values.ptr,
         };
 
         c.vkCmdBeginRenderPass(command_buffer, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
-        // clear-screen: the clear is performed by the render pass load op
+        // geometry pass: draw calls are recorded between beginFrame and endFrame
         // future: execute registered pass callbacks here
         c.vkCmdEndRenderPass(command_buffer);
     }
@@ -54,6 +55,40 @@ const RenderGraph = struct {
 // ---- error types for bridge ----
 
 const VkBridgeError = error{VulkanFailed};
+
+// ---- CameraUBO (std140 layout, 144 bytes) ----
+// view: 64 bytes, proj: 64 bytes, view_pos: 12 bytes, _pad: 4 bytes
+
+pub const CameraUBO = extern struct {
+    view: [16]f32,
+    proj: [16]f32,
+    view_pos: [3]f32,
+    _pad: f32 = 0.0,
+};
+
+// ---- LightUBO placeholder (std140 layout) ----
+// DirLight = 2x vec4 = 32 bytes, PointLight = 4x float + vec4 + vec4 = 48 bytes
+// 4 dir lights + 8 point lights + 2 ints (padded to 8 bytes) = 128 + 384 + 8 = 520 bytes
+// Round to 528 bytes to align to vec4 boundary
+
+const LightUBO = extern struct {
+    dir_lights: [4][8]f32 = [_][8]f32{[_]f32{0.0} ** 8} ** 4, // 4 * 32 = 128 bytes
+    point_lights: [8][12]f32 = [_][12]f32{[_]f32{0.0} ** 12} ** 8, // 8 * 48 = 384 bytes
+    num_dir_lights: i32 = 0,
+    num_point_lights: i32 = 0,
+    _pad: [2]i32 = [_]i32{0} ** 2,
+};
+
+// ---- MeshBuffers ----
+// GPU vertex + index buffers for a mesh, allocated via VMA.
+
+pub const MeshBuffers = struct {
+    vertex_buffer: c.VkBuffer,
+    vertex_allocation: vma.VmaAllocation,
+    index_buffer: c.VkBuffer,
+    index_allocation: vma.VmaAllocation,
+    index_count: u32,
+};
 
 // ---- Vulkan context (internal state) ----
 
@@ -76,6 +111,12 @@ const VulkanContext = struct {
     swapchain_format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
     swapchain_extent: c.VkExtent2D = .{ .width = 0, .height = 0 },
 
+    // depth buffer
+    depth_image: c.VkImage = null,
+    depth_image_view: c.VkImageView = null,
+    depth_allocation: vma.VmaAllocation = undefined,
+    depth_format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
+
     // render pass + framebuffers
     render_pass: c.VkRenderPass = null,
     framebuffers: [8]c.VkFramebuffer = [_]c.VkFramebuffer{null} ** 8,
@@ -97,11 +138,35 @@ const VulkanContext = struct {
     // render graph
     graph: RenderGraph = RenderGraph.init(),
 
-    // clear color
+    // clear colors (index 0 = color, index 1 = depth)
     clear_color: c.VkClearValue = .{ .color = .{ .float32 = [4]f32{ 0.0, 0.0, 0.0, 1.0 } } },
 
     // state
     framebuffer_resized: bool = false,
+
+    // VMA allocator
+    vma_ctx: vma.VmaContext = undefined,
+    vma_initialized: bool = false,
+
+    // graphics pipeline
+    pipeline: c.VkPipeline = null,
+    pipeline_layout: c.VkPipelineLayout = null,
+    descriptor_set_layout_0: c.VkDescriptorSetLayout = null,
+    descriptor_set_layout_1: c.VkDescriptorSetLayout = null,
+
+    // descriptor pool and per-frame sets
+    descriptor_pool: c.VkDescriptorPool = null,
+    descriptor_sets_0: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSet = [_]c.VkDescriptorSet{null} ** MAX_FRAMES_IN_FLIGHT,
+
+    // UBOs (double-buffered)
+    camera_ubos: [MAX_FRAMES_IN_FLIGHT]vma.BufferAlloc = undefined,
+    camera_mapped: [MAX_FRAMES_IN_FLIGHT][*]u8 = undefined,
+    light_ubos: [MAX_FRAMES_IN_FLIGHT]vma.BufferAlloc = undefined,
+    light_mapped: [MAX_FRAMES_IN_FLIGHT][*]u8 = undefined,
+    ubos_initialized: bool = false,
+
+    // active command buffer (set in beginFrame, used by draw*)
+    active_cmd: c.VkCommandBuffer = null,
 };
 
 // ---- instance creation ----
@@ -517,7 +582,83 @@ fn createSwapchain(ctx: *VulkanContext) c.VkResult {
     return c.VK_SUCCESS;
 }
 
-// ---- render pass ----
+// ---- depth buffer ----
+
+fn findDepthFormat(physical_device: c.VkPhysicalDevice) c.VkFormat {
+    // Try formats in order of preference: D32 pure, D32 with stencil, D24 with stencil
+    // Per VK3-16: cross-vendor compatible selection
+    const candidates = [_]c.VkFormat{
+        c.VK_FORMAT_D32_SFLOAT,
+        c.VK_FORMAT_D32_SFLOAT_S8_UINT,
+        c.VK_FORMAT_D24_UNORM_S8_UINT,
+    };
+
+    for (candidates) |format| {
+        var props: c.VkFormatProperties = undefined;
+        c.vkGetPhysicalDeviceFormatProperties(physical_device, format, &props);
+        if (props.optimalTilingFeatures & c.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT != 0) {
+            return format;
+        }
+    }
+
+    // Fallback — should not happen on any modern GPU
+    return c.VK_FORMAT_D32_SFLOAT;
+}
+
+fn createDepthResources(ctx: *VulkanContext) anyerror!void {
+    ctx.depth_format = findDepthFormat(ctx.physical_device);
+
+    // Create depth image via VMA (DEVICE_LOCAL, DEPTH_STENCIL_ATTACHMENT usage)
+    const image_alloc = try ctx.vma_ctx.createImage(
+        ctx.swapchain_extent.width,
+        ctx.swapchain_extent.height,
+        ctx.depth_format,
+        c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        true, // gpu_only: device-local
+    );
+
+    ctx.depth_image = image_alloc.image;
+    ctx.depth_allocation = image_alloc.allocation;
+
+    // Create image view with DEPTH aspect
+    const view_info = c.VkImageViewCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .image = ctx.depth_image,
+        .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+        .format = ctx.depth_format,
+        .components = .{
+            .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+        },
+        .subresourceRange = .{
+            .aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
+
+    const result = c.vkCreateImageView(ctx.device, &view_info, null, &ctx.depth_image_view);
+    if (result != c.VK_SUCCESS) return VkBridgeError.VulkanFailed;
+}
+
+fn destroyDepthResources(ctx: *VulkanContext) void {
+    if (ctx.depth_image_view != null) {
+        c.vkDestroyImageView(ctx.device, ctx.depth_image_view, null);
+        ctx.depth_image_view = null;
+    }
+    if (ctx.depth_image != null) {
+        ctx.vma_ctx.destroyImage(ctx.depth_image, ctx.depth_allocation);
+        ctx.depth_image = null;
+    }
+}
+
+// ---- render pass (with depth attachment) ----
 
 fn createRenderPass(ctx: *VulkanContext) c.VkResult {
     const color_attachment = c.VkAttachmentDescription{
@@ -532,9 +673,26 @@ fn createRenderPass(ctx: *VulkanContext) c.VkResult {
         .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
     };
 
+    const depth_attachment = c.VkAttachmentDescription{
+        .flags = 0,
+        .format = ctx.depth_format,
+        .samples = c.VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+
     const color_ref = c.VkAttachmentReference{
         .attachment = 0,
         .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    const depth_ref = c.VkAttachmentReference{
+        .attachment = 1,
+        .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     };
 
     const subpass = c.VkSubpassDescription{
@@ -545,27 +703,33 @@ fn createRenderPass(ctx: *VulkanContext) c.VkResult {
         .colorAttachmentCount = 1,
         .pColorAttachments = &color_ref,
         .pResolveAttachments = null,
-        .pDepthStencilAttachment = null,
+        .pDepthStencilAttachment = &depth_ref,
         .preserveAttachmentCount = 0,
         .pPreserveAttachments = null,
     };
 
+    // Dependency: ensure depth write completes before next access
     const dependency = c.VkSubpassDependency{
         .srcSubpass = c.VK_SUBPASS_EXTERNAL,
         .dstSubpass = 0,
-        .srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         .srcAccessMask = 0,
-        .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+            c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         .dependencyFlags = 0,
     };
+
+    const attachments = [2]c.VkAttachmentDescription{ color_attachment, depth_attachment };
 
     const render_pass_info = c.VkRenderPassCreateInfo{
         .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .pNext = null,
         .flags = 0,
-        .attachmentCount = 1,
-        .pAttachments = &color_attachment,
+        .attachmentCount = 2,
+        .pAttachments = &attachments,
         .subpassCount = 1,
         .pSubpasses = &subpass,
         .dependencyCount = 1,
@@ -575,18 +739,20 @@ fn createRenderPass(ctx: *VulkanContext) c.VkResult {
     return c.vkCreateRenderPass(ctx.device, &render_pass_info, null, &ctx.render_pass);
 }
 
-// ---- framebuffers ----
+// ---- framebuffers (color + depth) ----
 
 fn createFramebuffers(ctx: *VulkanContext) c.VkResult {
     var i: u32 = 0;
     while (i < ctx.swapchain_image_count) : (i += 1) {
+        const attachments = [2]c.VkImageView{ ctx.swapchain_views[i], ctx.depth_image_view };
+
         const fb_info = c.VkFramebufferCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .renderPass = ctx.render_pass,
-            .attachmentCount = 1,
-            .pAttachments = &[_]c.VkImageView{ctx.swapchain_views[i]},
+            .attachmentCount = 2,
+            .pAttachments = &attachments,
             .width = ctx.swapchain_extent.width,
             .height = ctx.swapchain_extent.height,
             .layers = 1,
@@ -653,9 +819,552 @@ fn createSyncObjects(ctx: *VulkanContext) c.VkResult {
     return c.VK_SUCCESS;
 }
 
+// ---- .spv shader loading ----
+
+fn loadShaderModule(device: c.VkDevice, path: [*:0]const u8) ?c.VkShaderModule {
+    const file = std.fs.cwd().openFileZ(path, .{}) catch |err| {
+        std.debug.print("[TamgaVK3D] Failed to open shader: {s} ({any})\n", .{ path, err });
+        return null;
+    };
+    defer file.close();
+
+    const file_size = file.getEndPos() catch return null;
+    if (file_size == 0 or file_size > 1024 * 1024) {
+        std.debug.print("[TamgaVK3D] Shader file size invalid: {s} ({d} bytes)\n", .{ path, file_size });
+        return null;
+    }
+
+    // Allocate buffer aligned to u32 as required by Vulkan spec
+    const allocator = std.heap.page_allocator;
+    const buf = allocator.alignedAlloc(u8, 4, file_size) catch return null;
+    defer allocator.free(buf);
+
+    const bytes_read = file.readAll(buf) catch return null;
+    if (bytes_read != file_size) return null;
+
+    const shader_info = c.VkShaderModuleCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .codeSize = file_size,
+        .pCode = @ptrCast(@alignCast(buf.ptr)),
+    };
+
+    var shader_module: c.VkShaderModule = null;
+    const result = c.vkCreateShaderModule(device, &shader_info, null, &shader_module);
+    if (result != c.VK_SUCCESS) {
+        std.debug.print("[TamgaVK3D] vkCreateShaderModule failed: {s}\n", .{path});
+        return null;
+    }
+
+    return shader_module;
+}
+
+// ---- descriptor set layouts ----
+
+fn createDescriptorSetLayouts(ctx: *VulkanContext) c.VkResult {
+    // Set 0 (per-frame): binding 0 = CameraUBO (VERTEX | FRAGMENT), binding 1 = LightUBO (FRAGMENT)
+    {
+        const bindings = [2]c.VkDescriptorSetLayoutBinding{
+            .{
+                .binding = 0,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = null,
+            },
+            .{
+                .binding = 1,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = null,
+            },
+        };
+
+        const layout_info = c.VkDescriptorSetLayoutCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .bindingCount = 2,
+            .pBindings = &bindings,
+        };
+
+        const result = c.vkCreateDescriptorSetLayout(ctx.device, &layout_info, null, &ctx.descriptor_set_layout_0);
+        if (result != c.VK_SUCCESS) return result;
+    }
+
+    // Set 1 (per-material): binding 0 = MaterialUBO (FRAGMENT), binding 1 = sampler2D (FRAGMENT)
+    {
+        const bindings = [2]c.VkDescriptorSetLayoutBinding{
+            .{
+                .binding = 0,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = null,
+            },
+            .{
+                .binding = 1,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = null,
+            },
+        };
+
+        const layout_info = c.VkDescriptorSetLayoutCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .bindingCount = 2,
+            .pBindings = &bindings,
+        };
+
+        const result = c.vkCreateDescriptorSetLayout(ctx.device, &layout_info, null, &ctx.descriptor_set_layout_1);
+        if (result != c.VK_SUCCESS) return result;
+    }
+
+    return c.VK_SUCCESS;
+}
+
+// ---- UBO management ----
+
+fn createUBOs(ctx: *VulkanContext) anyerror!void {
+    const ubo_usage: u32 = 0x00000010; // VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
+
+    var i: u32 = 0;
+    while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
+        // Camera UBO — host-visible + persistently mapped
+        const cam_alloc = try ctx.vma_ctx.createBuffer(@sizeOf(CameraUBO), ubo_usage, false);
+        ctx.camera_ubos[i] = cam_alloc;
+
+        // Map camera UBO
+        ctx.camera_mapped[i] = ctx.vma_ctx.mapBuffer(cam_alloc.allocation) orelse return VkBridgeError.VulkanFailed;
+
+        // Light UBO placeholder
+        const light_alloc = try ctx.vma_ctx.createBuffer(@sizeOf(LightUBO), ubo_usage, false);
+        ctx.light_ubos[i] = light_alloc;
+
+        // Map light UBO and zero it (no lights active by default)
+        ctx.light_mapped[i] = ctx.vma_ctx.mapBuffer(light_alloc.allocation) orelse return VkBridgeError.VulkanFailed;
+
+        const default_light = LightUBO{};
+        @memcpy(ctx.light_mapped[i][0..@sizeOf(LightUBO)], std.mem.asBytes(&default_light));
+    }
+
+    ctx.ubos_initialized = true;
+}
+
+fn destroyUBOs(ctx: *VulkanContext) void {
+    if (!ctx.ubos_initialized) return;
+    var i: u32 = 0;
+    while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
+        ctx.vma_ctx.unmapBuffer(ctx.camera_ubos[i].allocation);
+        ctx.vma_ctx.destroyBuffer(ctx.camera_ubos[i].buffer, ctx.camera_ubos[i].allocation);
+        ctx.vma_ctx.unmapBuffer(ctx.light_ubos[i].allocation);
+        ctx.vma_ctx.destroyBuffer(ctx.light_ubos[i].buffer, ctx.light_ubos[i].allocation);
+    }
+    ctx.ubos_initialized = false;
+}
+
+// ---- descriptor pool and per-frame sets ----
+
+fn createDescriptorPool(ctx: *VulkanContext) c.VkResult {
+    // Per Pitfall 5 in research: size the pool generously to avoid VK_ERROR_OUT_OF_POOL_MEMORY
+    const pool_sizes = [2]c.VkDescriptorPoolSize{
+        .{
+            .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 16,
+        },
+        .{
+            .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 64,
+        },
+    };
+
+    const pool_info = c.VkDescriptorPoolCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .maxSets = MAX_FRAMES_IN_FLIGHT + 16,
+        .poolSizeCount = 2,
+        .pPoolSizes = &pool_sizes,
+    };
+
+    return c.vkCreateDescriptorPool(ctx.device, &pool_info, null, &ctx.descriptor_pool);
+}
+
+fn allocatePerFrameDescriptorSets(ctx: *VulkanContext) c.VkResult {
+    var layouts: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSetLayout = [_]c.VkDescriptorSetLayout{null} ** MAX_FRAMES_IN_FLIGHT;
+    var i: u32 = 0;
+    while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
+        layouts[i] = ctx.descriptor_set_layout_0;
+    }
+
+    const alloc_info = c.VkDescriptorSetAllocateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = null,
+        .descriptorPool = ctx.descriptor_pool,
+        .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+        .pSetLayouts = &layouts,
+    };
+
+    const result = c.vkAllocateDescriptorSets(ctx.device, &alloc_info, &ctx.descriptor_sets_0);
+    if (result != c.VK_SUCCESS) return result;
+
+    // Write camera UBO and light UBO bindings for each frame
+    i = 0;
+    while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
+        const cam_buf_info = c.VkDescriptorBufferInfo{
+            .buffer = ctx.camera_ubos[i].buffer,
+            .offset = 0,
+            .range = @sizeOf(CameraUBO),
+        };
+
+        const light_buf_info = c.VkDescriptorBufferInfo{
+            .buffer = ctx.light_ubos[i].buffer,
+            .offset = 0,
+            .range = @sizeOf(LightUBO),
+        };
+
+        const writes = [2]c.VkWriteDescriptorSet{
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = ctx.descriptor_sets_0[i],
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &cam_buf_info,
+                .pTexelBufferView = null,
+            },
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = ctx.descriptor_sets_0[i],
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &light_buf_info,
+                .pTexelBufferView = null,
+            },
+        };
+
+        c.vkUpdateDescriptorSets(ctx.device, 2, &writes, 0, null);
+    }
+
+    return c.VK_SUCCESS;
+}
+
+// ---- graphics pipeline ----
+
+fn createGraphicsPipeline(ctx: *VulkanContext) anyerror!void {
+    // Load .spv shader modules
+    const vert_module = loadShaderModule(ctx.device, "src/shaders/mesh.vert.spv") orelse {
+        std.debug.print("[TamgaVK3D] Failed to load mesh.vert.spv\n", .{});
+        return VkBridgeError.VulkanFailed;
+    };
+    defer c.vkDestroyShaderModule(ctx.device, vert_module, null);
+
+    const frag_module = loadShaderModule(ctx.device, "src/shaders/mesh.frag.spv") orelse {
+        std.debug.print("[TamgaVK3D] Failed to load mesh.frag.spv\n", .{});
+        return VkBridgeError.VulkanFailed;
+    };
+    defer c.vkDestroyShaderModule(ctx.device, frag_module, null);
+
+    const shader_stages = [2]c.VkPipelineShaderStageCreateInfo{
+        .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vert_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        },
+        .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = frag_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        },
+    };
+
+    // Vertex input: single binding, 4 attributes matching D-05 vertex format
+    // stride = 48 bytes: vec3 pos (12) + vec3 normal (12) + vec2 uv (8) + vec4 color (16)
+    const vertex_binding = c.VkVertexInputBindingDescription{
+        .binding = 0,
+        .stride = 48,
+        .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+
+    const vertex_attributes = [4]c.VkVertexInputAttributeDescription{
+        .{ .location = 0, .binding = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 }, // position
+        .{ .location = 1, .binding = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 12 }, // normal
+        .{ .location = 2, .binding = 0, .format = c.VK_FORMAT_R32G32_SFLOAT, .offset = 24 }, // uv
+        .{ .location = 3, .binding = 0, .format = c.VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 32 }, // color
+    };
+
+    const vertex_input_info = c.VkPipelineVertexInputStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &vertex_binding,
+        .vertexAttributeDescriptionCount = 4,
+        .pVertexAttributeDescriptions = &vertex_attributes,
+    };
+
+    const input_assembly = c.VkPipelineInputAssemblyStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = c.VK_FALSE,
+    };
+
+    // Dynamic viewport and scissor — set in beginFrame
+    const dynamic_states = [2]c.VkDynamicState{
+        c.VK_DYNAMIC_STATE_VIEWPORT,
+        c.VK_DYNAMIC_STATE_SCISSOR,
+    };
+
+    const dynamic_state_info = c.VkPipelineDynamicStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .dynamicStateCount = 2,
+        .pDynamicStates = &dynamic_states,
+    };
+
+    const viewport_state = c.VkPipelineViewportStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .viewportCount = 1,
+        .pViewports = null, // dynamic
+        .scissorCount = 1,
+        .pScissors = null, // dynamic
+    };
+
+    const rasterizer = c.VkPipelineRasterizationStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .depthClampEnable = c.VK_FALSE,
+        .rasterizerDiscardEnable = c.VK_FALSE,
+        .polygonMode = c.VK_POLYGON_MODE_FILL,
+        .cullMode = c.VK_CULL_MODE_BACK_BIT,
+        .frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .depthBiasEnable = c.VK_FALSE,
+        .depthBiasConstantFactor = 0.0,
+        .depthBiasClamp = 0.0,
+        .depthBiasSlopeFactor = 0.0,
+        .lineWidth = 1.0,
+    };
+
+    const multisampling = c.VkPipelineMultisampleStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
+        .sampleShadingEnable = c.VK_FALSE,
+        .minSampleShading = 1.0,
+        .pSampleMask = null,
+        .alphaToCoverageEnable = c.VK_FALSE,
+        .alphaToOneEnable = c.VK_FALSE,
+    };
+
+    const depth_stencil = c.VkPipelineDepthStencilStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .depthTestEnable = c.VK_TRUE,
+        .depthWriteEnable = c.VK_TRUE,
+        .depthCompareOp = c.VK_COMPARE_OP_LESS,
+        .depthBoundsTestEnable = c.VK_FALSE,
+        .stencilTestEnable = c.VK_FALSE,
+        .front = std.mem.zeroes(c.VkStencilOpState),
+        .back = std.mem.zeroes(c.VkStencilOpState),
+        .minDepthBounds = 0.0,
+        .maxDepthBounds = 1.0,
+    };
+
+    const color_blend_attachment = c.VkPipelineColorBlendAttachmentState{
+        .blendEnable = c.VK_TRUE,
+        .srcColorBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = c.VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = c.VK_BLEND_OP_ADD,
+        .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT |
+            c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
+    };
+
+    const color_blending = c.VkPipelineColorBlendStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .logicOpEnable = c.VK_FALSE,
+        .logicOp = c.VK_LOGIC_OP_COPY,
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_attachment,
+        .blendConstants = [4]f32{ 0.0, 0.0, 0.0, 0.0 },
+    };
+
+    // Pipeline layout: 2 descriptor set layouts + push constants (model matrix 64 bytes)
+    const push_constant_range = c.VkPushConstantRange{
+        .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT,
+        .offset = 0,
+        .size = 64, // mat4 = 16 * 4 bytes
+    };
+
+    const set_layouts = [2]c.VkDescriptorSetLayout{ ctx.descriptor_set_layout_0, ctx.descriptor_set_layout_1 };
+
+    const layout_info = c.VkPipelineLayoutCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .setLayoutCount = 2,
+        .pSetLayouts = &set_layouts,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_constant_range,
+    };
+
+    const layout_result = c.vkCreatePipelineLayout(ctx.device, &layout_info, null, &ctx.pipeline_layout);
+    if (layout_result != c.VK_SUCCESS) return VkBridgeError.VulkanFailed;
+
+    // Create graphics pipeline
+    const pipeline_info = c.VkGraphicsPipelineCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .stageCount = 2,
+        .pStages = &shader_stages,
+        .pVertexInputState = &vertex_input_info,
+        .pInputAssemblyState = &input_assembly,
+        .pTessellationState = null,
+        .pViewportState = &viewport_state,
+        .pRasterizationState = &rasterizer,
+        .pMultisampleState = &multisampling,
+        .pDepthStencilState = &depth_stencil,
+        .pColorBlendState = &color_blending,
+        .pDynamicState = &dynamic_state_info,
+        .layout = ctx.pipeline_layout,
+        .renderPass = ctx.render_pass,
+        .subpass = 0,
+        .basePipelineHandle = null,
+        .basePipelineIndex = -1,
+    };
+
+    const pipeline_result = c.vkCreateGraphicsPipelines(ctx.device, null, 1, &pipeline_info, null, &ctx.pipeline);
+    if (pipeline_result != c.VK_SUCCESS) return VkBridgeError.VulkanFailed;
+}
+
+// ---- mesh buffer management ----
+
+fn createMeshBuffers(
+    ctx: *VulkanContext,
+    vertices: [*]const u8,
+    vertex_byte_size: u32,
+    indices: [*]const u32,
+    index_count: u32,
+) anyerror!MeshBuffers {
+    const index_byte_size: u32 = index_count * @sizeOf(u32);
+
+    // Vertex buffer: GPU-local, requires staging upload
+    const vertex_usage: u32 = 0x00000080 | 0x00000002; // VERTEX_BUFFER | TRANSFER_DST
+    const vertex_alloc = try ctx.vma_ctx.createBuffer(vertex_byte_size, vertex_usage, true);
+
+    // Index buffer: GPU-local, requires staging upload
+    const index_usage: u32 = 0x00000100 | 0x00000002; // INDEX_BUFFER | TRANSFER_DST
+    const index_alloc = try ctx.vma_ctx.createBuffer(index_byte_size, index_usage, true);
+
+    // Upload vertex data via staging ring
+    const vert_region = try ctx.vma_ctx.stagingWrite(vertices, vertex_byte_size);
+
+    // Upload index data via staging ring
+    const index_region = try ctx.vma_ctx.stagingWrite(@ptrCast(indices), index_byte_size);
+
+    // Record copy commands in a one-shot command buffer
+    const cmd_alloc_info = c.VkCommandBufferAllocateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .pNext = null,
+        .commandPool = ctx.command_pool,
+        .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+
+    var cmd: c.VkCommandBuffer = null;
+    _ = c.vkAllocateCommandBuffers(ctx.device, &cmd_alloc_info, &cmd);
+
+    const begin_info = c.VkCommandBufferBeginInfo{
+        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = null,
+        .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = null,
+    };
+    _ = c.vkBeginCommandBuffer(cmd, &begin_info);
+
+    // Copy vertex data
+    const vert_copy = c.VkBufferCopy{
+        .srcOffset = vert_region.offset,
+        .dstOffset = 0,
+        .size = vertex_byte_size,
+    };
+    c.vkCmdCopyBuffer(cmd, vert_region.buffer, vertex_alloc.buffer, 1, &vert_copy);
+
+    // Copy index data
+    const index_copy = c.VkBufferCopy{
+        .srcOffset = index_region.offset,
+        .dstOffset = 0,
+        .size = index_byte_size,
+    };
+    c.vkCmdCopyBuffer(cmd, index_region.buffer, index_alloc.buffer, 1, &index_copy);
+
+    _ = c.vkEndCommandBuffer(cmd);
+
+    const submit_info = c.VkSubmitInfo{
+        .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = null,
+        .waitSemaphoreCount = 0,
+        .pWaitSemaphores = null,
+        .pWaitDstStageMask = null,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &cmd,
+        .signalSemaphoreCount = 0,
+        .pSignalSemaphores = null,
+    };
+
+    _ = c.vkQueueSubmit(ctx.graphics_queue, 1, &submit_info, null);
+    _ = c.vkQueueWaitIdle(ctx.graphics_queue);
+
+    c.vkFreeCommandBuffers(ctx.device, ctx.command_pool, 1, &cmd);
+
+    return MeshBuffers{
+        .vertex_buffer = vertex_alloc.buffer,
+        .vertex_allocation = vertex_alloc.allocation,
+        .index_buffer = index_alloc.buffer,
+        .index_allocation = index_alloc.allocation,
+        .index_count = index_count,
+    };
+}
+
 // ---- swapchain cleanup + recreation ----
 
 fn cleanupSwapchain(ctx: *VulkanContext) void {
+    // destroy depth resources before framebuffers
+    destroyDepthResources(ctx);
+
     var i: u32 = 0;
     while (i < ctx.swapchain_image_count) : (i += 1) {
         if (ctx.framebuffers[i] != null) {
@@ -685,6 +1394,10 @@ fn recreateSwapchain(ctx: *VulkanContext) bool {
     cleanupSwapchain(ctx);
 
     if (createSwapchain(ctx) != c.VK_SUCCESS) return false;
+
+    // Re-create depth resources after swapchain (new extent)
+    createDepthResources(ctx) catch return false;
+
     if (createFramebuffers(ctx) != c.VK_SUCCESS) return false;
 
     return true;
@@ -697,6 +1410,7 @@ pub const Renderer = struct {
 
     pub fn create(window_handle: @import("tamga_sdl3_bridge.zig").WindowHandle, debug_mode: bool) anyerror!Renderer {
         var ctx = VulkanContext{};
+
         // WindowHandle is now a plain *anyopaque pointer (type alias).
         ctx.sdl_window = @ptrCast(@alignCast(window_handle));
         ctx.debug_mode = debug_mode;
@@ -724,17 +1438,28 @@ pub const Renderer = struct {
             return VkBridgeError.VulkanFailed;
         }
 
+        // VMA allocator (after logical device)
+        ctx.vma_ctx = vma.VmaContext.create(ctx.instance, ctx.physical_device, ctx.device) catch {
+            return VkBridgeError.VulkanFailed;
+        };
+        ctx.vma_initialized = true;
+
         // swapchain
         if (createSwapchain(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
-        // render pass
+        // depth buffer (requires VMA + swapchain extent)
+        createDepthResources(&ctx) catch {
+            return VkBridgeError.VulkanFailed;
+        };
+
+        // render pass (requires depth_format from createDepthResources)
         if (createRenderPass(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
-        // framebuffers
+        // framebuffers (requires depth image view + render pass)
         if (createFramebuffers(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
@@ -743,6 +1468,29 @@ pub const Renderer = struct {
         if (createCommandPool(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
+
+        // UBOs (requires VMA + command pool for initial staging)
+        createUBOs(&ctx) catch {
+            return VkBridgeError.VulkanFailed;
+        };
+
+        // descriptor set layouts
+        if (createDescriptorSetLayouts(&ctx) != c.VK_SUCCESS) {
+            return VkBridgeError.VulkanFailed;
+        }
+
+        // descriptor pool + per-frame sets (requires UBOs)
+        if (createDescriptorPool(&ctx) != c.VK_SUCCESS) {
+            return VkBridgeError.VulkanFailed;
+        }
+        if (allocatePerFrameDescriptorSets(&ctx) != c.VK_SUCCESS) {
+            return VkBridgeError.VulkanFailed;
+        }
+
+        // graphics pipeline (requires render pass + descriptor set layouts)
+        createGraphicsPipeline(&ctx) catch {
+            return VkBridgeError.VulkanFailed;
+        };
 
         // sync objects
         if (createSyncObjects(&ctx) != c.VK_SUCCESS) {
@@ -762,11 +1510,25 @@ pub const Renderer = struct {
             if (self.ctx.in_flight_fences[i] != null) c.vkDestroyFence(self.ctx.device, self.ctx.in_flight_fences[i], null);
         }
 
+        if (self.ctx.pipeline != null) c.vkDestroyPipeline(self.ctx.device, self.ctx.pipeline, null);
+        if (self.ctx.pipeline_layout != null) c.vkDestroyPipelineLayout(self.ctx.device, self.ctx.pipeline_layout, null);
+
+        if (self.ctx.descriptor_pool != null) c.vkDestroyDescriptorPool(self.ctx.device, self.ctx.descriptor_pool, null);
+        if (self.ctx.descriptor_set_layout_0 != null) c.vkDestroyDescriptorSetLayout(self.ctx.device, self.ctx.descriptor_set_layout_0, null);
+        if (self.ctx.descriptor_set_layout_1 != null) c.vkDestroyDescriptorSetLayout(self.ctx.device, self.ctx.descriptor_set_layout_1, null);
+
+        destroyUBOs(&self.ctx);
+
         if (self.ctx.command_pool != null) c.vkDestroyCommandPool(self.ctx.device, self.ctx.command_pool, null);
 
         cleanupSwapchain(&self.ctx);
 
         if (self.ctx.render_pass != null) c.vkDestroyRenderPass(self.ctx.device, self.ctx.render_pass, null);
+
+        if (self.ctx.vma_initialized) {
+            self.ctx.vma_ctx.destroy();
+        }
+
         if (self.ctx.device != null) c.vkDestroyDevice(self.ctx.device, null);
 
         destroyDebugMessenger(&self.ctx);
@@ -812,13 +1574,50 @@ pub const Renderer = struct {
         };
         _ = c.vkBeginCommandBuffer(ctx.command_buffers[frame], &begin_info);
 
-        // execute render graph (records render pass + barriers into command buffer)
+        // Two clear values: color + depth
+        const clear_values = [2]c.VkClearValue{
+            ctx.clear_color,
+            .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
+        };
+
         ctx.graph.execute(
             ctx.command_buffers[frame],
             ctx.render_pass,
             ctx.framebuffers[image_index],
             ctx.swapchain_extent,
-            ctx.clear_color,
+            clear_values[0..],
+        );
+
+        // Set active command buffer for draw calls
+        ctx.active_cmd = ctx.command_buffers[frame];
+
+        // Set dynamic viewport and scissor
+        const viewport = c.VkViewport{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(ctx.swapchain_extent.width),
+            .height = @floatFromInt(ctx.swapchain_extent.height),
+            .minDepth = 0.0,
+            .maxDepth = 1.0,
+        };
+        const scissor = c.VkRect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = ctx.swapchain_extent,
+        };
+        c.vkCmdSetViewport(ctx.active_cmd, 0, 1, &viewport);
+        c.vkCmdSetScissor(ctx.active_cmd, 0, 1, &scissor);
+
+        // Bind pipeline and per-frame descriptor set
+        c.vkCmdBindPipeline(ctx.active_cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
+        c.vkCmdBindDescriptorSets(
+            ctx.active_cmd,
+            c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            ctx.pipeline_layout,
+            0, // set 0
+            1,
+            &ctx.descriptor_sets_0[frame],
+            0,
+            null,
         );
 
         // store image index for endFrame
@@ -831,6 +1630,8 @@ pub const Renderer = struct {
         const ctx = &self.ctx;
         const frame = ctx.current_frame;
         const image_index = ctx.graph.current_image_index;
+
+        ctx.active_cmd = null;
 
         _ = c.vkEndCommandBuffer(ctx.command_buffers[frame]);
 
@@ -874,5 +1675,53 @@ pub const Renderer = struct {
 
     pub fn setClearColor(self: *Renderer, r: f32, g: f32, b: f32, a: f32) void {
         self.ctx.clear_color = .{ .color = .{ .float32 = [4]f32{ r, g, b, a } } };
+    }
+
+    pub fn setCamera(self: *Renderer, view: *const [16]f32, proj: *const [16]f32, view_pos: *const [3]f32) void {
+        const frame = self.ctx.current_frame;
+        const ubo = CameraUBO{
+            .view = view.*,
+            .proj = proj.*,
+            .view_pos = view_pos.*,
+        };
+        @memcpy(self.ctx.camera_mapped[frame][0..@sizeOf(CameraUBO)], std.mem.asBytes(&ubo));
+    }
+
+    pub fn drawMesh(self: *Renderer, mesh: *const MeshBuffers, model_matrix: *const [16]f32) void {
+        const cmd = self.ctx.active_cmd;
+        if (cmd == null) return;
+
+        const offset: u64 = 0;
+        c.vkCmdBindVertexBuffers(cmd, 0, 1, &mesh.vertex_buffer, &offset);
+        c.vkCmdBindIndexBuffer(cmd, mesh.index_buffer, 0, c.VK_INDEX_TYPE_UINT32);
+        c.vkCmdPushConstants(cmd, self.ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, 64, model_matrix);
+        c.vkCmdDrawIndexed(cmd, mesh.index_count, 1, 0, 0, 0);
+    }
+
+    pub fn createMesh(self: *Renderer, vertices: [*]const u8, vertex_byte_size: u32, indices: [*]const u32, index_count: u32) anyerror!MeshBuffers {
+        return createMeshBuffers(&self.ctx, vertices, vertex_byte_size, indices, index_count);
+    }
+
+    pub fn destroyMesh(self: *Renderer, mesh: *MeshBuffers) void {
+        self.ctx.vma_ctx.destroyBuffer(mesh.vertex_buffer, mesh.vertex_allocation);
+        self.ctx.vma_ctx.destroyBuffer(mesh.index_buffer, mesh.index_allocation);
+    }
+};
+
+// ---- bridge export functions for Mesh ----
+// The Orhon bridge calls these as part of the Mesh bridge struct.
+
+pub const Mesh = struct {
+    mesh_buffers: MeshBuffers,
+
+    pub fn create(renderer: *Renderer, vertices: *const anyopaque, vertex_byte_size: u32, indices: *const anyopaque, index_count: u32) anyerror!Mesh {
+        const vert_ptr: [*]const u8 = @ptrCast(vertices);
+        const idx_ptr: [*]const u32 = @ptrCast(@alignCast(indices));
+        const buffers = try renderer.createMesh(vert_ptr, vertex_byte_size, idx_ptr, index_count);
+        return Mesh{ .mesh_buffers = buffers };
+    }
+
+    pub fn destroy(self: *Mesh, renderer: *Renderer) void {
+        renderer.destroyMesh(&self.mesh_buffers);
     }
 };
