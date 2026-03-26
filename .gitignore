@@ -1,6 +1,15 @@
-.orh-cache/
+# Build output
 bin/
 zig-out/
+
+# Caches
+.orh-cache/
 zig-cache/
 .zig-cache/
+
+# Local docs (not tracked)
 *.txt
+
+# Tooling
+.planning/
+.claude/
