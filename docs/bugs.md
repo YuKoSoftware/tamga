@@ -118,3 +118,51 @@ Workaround removed in Phase 1 cleanup (260326-h4x) — WindowHandle wrapper stru
 **Workaround:** Renamed parameter to `byte_size` / `byte_count`.
 
 **Fix needed:** Determine if `size` is an intentional reserved keyword or an unintended parse conflict; if unintentional, allow it as an identifier in parameter position.
+
+### `const &BridgeStruct` parameter codegen passes by value instead of by pointer
+
+`bridge func draw(self: &Renderer, mesh: const &Mesh, ...)` — the `const &Mesh` parameter should pass a pointer to the argument, but the generated Zig emits a by-value pass. Zig expects `*const Mesh` but gets `Mesh`.
+
+**Found in:** Phase 2 plan 02-03 (tamga_vk3d.orh draw/destroyMesh)
+
+**Impact:** Cannot pass bridge struct values as `const &` to bridge functions. `self: &T` (mutable) works correctly as the receiver.
+
+**Workaround:** Changed `const &Mesh` parameters to pass `Mesh` by value (small struct, acceptable API).
+
+**Fix needed:** In codegen, when a bridge function parameter is `const &BridgeStruct`, emit `@ptrCast(&arg)` (take address) at the call site, not just `arg`.
+
+### `export fn` in sidecar .zig should be `pub export fn`
+
+Bridge functions declared in `main.orh` as `bridge func foo()` generate `export fn foo()` in the sidecar copy. The generated `main.zig` does `@import("main_bridge").foo` which requires `pub` visibility.
+
+**Found in:** Phase 2 plan 02-03 (main.zig bridge helper functions)
+
+**Impact:** Bridge functions in the main module's sidecar are not accessible from the generated Orhon code.
+
+**Workaround:** Manually add `pub` to all `export fn` declarations in `main.zig`.
+
+**Fix needed:** When copying sidecar .zig files to bridge files, ensure all `export fn` declarations also have `pub` visibility, or the codegen should emit `pub export fn` for bridge function implementations.
+
+### Cross-module `@cImport` type identity (Zig limitation)
+
+When multiple modules use `#linkC "vulkan"`, each Zig sidecar gets its own `@cImport({@cInclude("vulkan/vulkan.h")})`. Zig creates distinct opaque types per `@cImport` unit, so `VkBuffer` from module A ≠ `VkBuffer` from module B.
+
+**Found in:** Phase 2 (tamga_vk3d using tamga_vma types in Vulkan calls)
+
+**Impact:** All Vulkan handle types (VkBuffer, VkImage, VkInstance, etc.) must be `@ptrCast`'d when crossing module boundaries in Zig sidecars.
+
+**Workaround:** Added `@ptrCast` at every cross-module Vulkan handle boundary in tamga_vk3d.zig.
+
+**Fix needed:** Consider generating a shared `@cImport` module for all sidecars that `#linkC` the same library (e.g., all modules with `#linkC "vulkan"` share one `vulkan_c` import module). This would eliminate the need for manual `@ptrCast` at module boundaries.
+
+### No mechanism to compile C/C++ source files in module
+
+When a module needs a C/C++ implementation file (e.g., VMA requires `vma_impl.cpp` compiled separately), there is no Orhon directive to include it in the build. The generated `build.zig` has no `addCSourceFiles` or `addObjectFile` step.
+
+**Found in:** Phase 2 (tamga_vma module — VMA implementation is C++)
+
+**Impact:** Must manually patch the generated `build.zig` to add object files and re-link after every `orhon build`. Also, the generated build.zig doesn't `exe.linkLibrary(lib_tamga_vma)` for the executable — only `lib_tamga_vk3d` is linked, but VMA symbols are resolved at exe link time.
+
+**Workaround:** Pre-compile `vma_impl.cpp` with `zig c++`, patch generated `build.zig` to add `addObjectFile`, `linkLibCpp`, and `linkLibrary(lib_tamga_vma)`, then run `zig build` directly.
+
+**Fix needed:** Add a directive like `#csource "vma_impl.cpp"` or `#object "libs/vma_impl.o"` that the codegen includes in the generated `build.zig`. Also ensure transitive library dependencies are linked to the executable (if A depends on B static lib, the exe linking A should also link B).

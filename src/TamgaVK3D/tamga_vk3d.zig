@@ -1,5 +1,5 @@
 const std = @import("std");
-const vma = @import("tamga_vma_bridge.zig");
+const vma = @import("tamga_vma_bridge");
 const c = @cImport({
     @cInclude("vulkan/vulkan.h");
     @cInclude("SDL3/SDL.h");
@@ -617,7 +617,8 @@ fn createDepthResources(ctx: *VulkanContext) anyerror!void {
         true, // gpu_only: device-local
     );
 
-    ctx.depth_image = image_alloc.image;
+    // @ptrCast: VMA's @cImport VkImage → VK3D's @cImport VkImage (cross-module type identity)
+    ctx.depth_image = @ptrCast(image_alloc.image);
     ctx.depth_allocation = image_alloc.allocation;
 
     // Create image view with DEPTH aspect
@@ -653,7 +654,7 @@ fn destroyDepthResources(ctx: *VulkanContext) void {
         ctx.depth_image_view = null;
     }
     if (ctx.depth_image != null) {
-        ctx.vma_ctx.destroyImage(ctx.depth_image, ctx.depth_allocation);
+        ctx.vma_ctx.destroyImage(@ptrCast(ctx.depth_image), ctx.depth_allocation);
         ctx.depth_image = null;
     }
 }
@@ -836,7 +837,7 @@ fn loadShaderModule(device: c.VkDevice, path: [*:0]const u8) ?c.VkShaderModule {
 
     // Allocate buffer aligned to u32 as required by Vulkan spec
     const allocator = std.heap.page_allocator;
-    const buf = allocator.alignedAlloc(u8, 4, file_size) catch return null;
+    const buf = allocator.alloc(u8, file_size) catch return null;
     defer allocator.free(buf);
 
     const bytes_read = file.readAll(buf) catch return null;
@@ -1017,13 +1018,13 @@ fn allocatePerFrameDescriptorSets(ctx: *VulkanContext) c.VkResult {
     i = 0;
     while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
         const cam_buf_info = c.VkDescriptorBufferInfo{
-            .buffer = ctx.camera_ubos[i].buffer,
+            .buffer = @ptrCast(ctx.camera_ubos[i].buffer),
             .offset = 0,
             .range = @sizeOf(CameraUBO),
         };
 
         const light_buf_info = c.VkDescriptorBufferInfo{
-            .buffer = ctx.light_ubos[i].buffer,
+            .buffer = @ptrCast(ctx.light_ubos[i].buffer),
             .offset = 0,
             .range = @sizeOf(LightUBO),
         };
@@ -1321,7 +1322,8 @@ fn createMeshBuffers(
         .dstOffset = 0,
         .size = vertex_byte_size,
     };
-    c.vkCmdCopyBuffer(cmd, vert_region.buffer, vertex_alloc.buffer, 1, &vert_copy);
+    // @ptrCast: VMA's @cImport VkBuffer → VK3D's @cImport VkBuffer (cross-module type identity)
+    c.vkCmdCopyBuffer(cmd, @ptrCast(vert_region.buffer), @ptrCast(vertex_alloc.buffer), 1, &vert_copy);
 
     // Copy index data
     const index_copy = c.VkBufferCopy{
@@ -1329,7 +1331,7 @@ fn createMeshBuffers(
         .dstOffset = 0,
         .size = index_byte_size,
     };
-    c.vkCmdCopyBuffer(cmd, index_region.buffer, index_alloc.buffer, 1, &index_copy);
+    c.vkCmdCopyBuffer(cmd, @ptrCast(index_region.buffer), @ptrCast(index_alloc.buffer), 1, &index_copy);
 
     _ = c.vkEndCommandBuffer(cmd);
 
@@ -1351,9 +1353,9 @@ fn createMeshBuffers(
     c.vkFreeCommandBuffers(ctx.device, ctx.command_pool, 1, &cmd);
 
     return MeshBuffers{
-        .vertex_buffer = vertex_alloc.buffer,
+        .vertex_buffer = @ptrCast(vertex_alloc.buffer),
         .vertex_allocation = vertex_alloc.allocation,
-        .index_buffer = index_alloc.buffer,
+        .index_buffer = @ptrCast(index_alloc.buffer),
         .index_allocation = index_alloc.allocation,
         .index_count = index_count,
     };
@@ -1408,7 +1410,7 @@ fn recreateSwapchain(ctx: *VulkanContext) bool {
 pub const Renderer = struct {
     ctx: VulkanContext,
 
-    pub fn create(window_handle: @import("tamga_sdl3_bridge.zig").WindowHandle, debug_mode: bool) anyerror!Renderer {
+    pub fn create(window_handle: @import("tamga_sdl3_bridge").WindowHandle, debug_mode: bool) anyerror!Renderer {
         var ctx = VulkanContext{};
 
         // WindowHandle is now a plain *anyopaque pointer (type alias).
@@ -1439,7 +1441,8 @@ pub const Renderer = struct {
         }
 
         // VMA allocator (after logical device)
-        ctx.vma_ctx = vma.VmaContext.create(ctx.instance, ctx.physical_device, ctx.device) catch {
+        // @ptrCast: VK3D's @cImport Vulkan handles → VMA's @cImport types (cross-module type identity)
+        ctx.vma_ctx = vma.VmaContext.create(@ptrCast(ctx.instance), @ptrCast(ctx.physical_device), @ptrCast(ctx.device)) catch {
             return VkBridgeError.VulkanFailed;
         };
         ctx.vma_initialized = true;
@@ -1697,13 +1700,14 @@ pub const Renderer = struct {
     // draw — bridge-callable: draws a Mesh with a model matrix.
     // mesh: const &Mesh (read-only borrow of the Mesh bridge struct)
     // model_matrix: Ptr(u8) = pointer to 16 f32 values (column-major mat4)
-    pub fn draw(self: *Renderer, mesh: *const Mesh, model_matrix: *const anyopaque) void {
+    pub fn draw(self: *Renderer, mesh: Mesh, model_matrix: *const anyopaque) void {
         const cmd = self.ctx.active_cmd;
         if (cmd == null) return;
 
         const model_mat: *const [16]f32 = @ptrCast(@alignCast(model_matrix));
         const offset: u64 = 0;
-        c.vkCmdBindVertexBuffers(cmd, 0, 1, &mesh.mesh_buffers.vertex_buffer, &offset);
+        const vb = mesh.mesh_buffers.vertex_buffer;
+        c.vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
         c.vkCmdBindIndexBuffer(cmd, mesh.mesh_buffers.index_buffer, 0, c.VK_INDEX_TYPE_UINT32);
         c.vkCmdPushConstants(cmd, self.ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, 64, model_mat);
         c.vkCmdDrawIndexed(cmd, mesh.mesh_buffers.index_count, 1, 0, 0, 0);
@@ -1722,9 +1726,9 @@ pub const Renderer = struct {
     }
 
     // destroyMesh: bridge func — releases vertex and index buffer allocations.
-    pub fn destroyMesh(self: *Renderer, mesh: *const Mesh) void {
-        self.ctx.vma_ctx.destroyBuffer(mesh.mesh_buffers.vertex_buffer, mesh.mesh_buffers.vertex_allocation);
-        self.ctx.vma_ctx.destroyBuffer(mesh.mesh_buffers.index_buffer, mesh.mesh_buffers.index_allocation);
+    pub fn destroyMesh(self: *Renderer, mesh: Mesh) void {
+        self.ctx.vma_ctx.destroyBuffer(@ptrCast(mesh.mesh_buffers.vertex_buffer), mesh.mesh_buffers.vertex_allocation);
+        self.ctx.vma_ctx.destroyBuffer(@ptrCast(mesh.mesh_buffers.index_buffer), mesh.mesh_buffers.index_allocation);
     }
 };
 

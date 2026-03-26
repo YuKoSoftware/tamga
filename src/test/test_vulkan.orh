@@ -28,8 +28,8 @@ pub func run_vulkan_test() void {
 
     console.println("SDL3 init: ok")
 
-    // WIN-01: Window with Vulkan flag (8 = SDL_WINDOW_VULKAN)
-    const winResult = tamga_sdl3.Window.create("Vulkan Mesh Test", 800, 600, 8)
+    // WIN-01: Window with Vulkan flag (0x10000000 = SDL_WINDOW_VULKAN in SDL3)
+    const winResult = tamga_sdl3.Window.create("Vulkan Mesh Test", 800, 600, 268435456)
     if(winResult is Error) {
         console.println("Window creation failed:")
         console.println(tamga_sdl3.getError())
