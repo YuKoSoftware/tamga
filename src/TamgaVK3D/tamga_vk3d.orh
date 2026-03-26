@@ -7,13 +7,52 @@ module tamga_vk3d
 #linkC "SDL3"
 
 import tamga_sdl3
+import tamga_vma
+
+// ---- Mesh ----
+// GPU vertex + index buffer pair, allocated via VMA.
+// Vertices use the standard D-05 format: position (vec3) + normal (vec3) + uv (vec2) + color (vec4)
+// = 48 bytes per vertex. Indices are u32.
+//
+// Mesh objects are created and destroyed via Renderer methods (see below),
+// since buffer allocation requires access to the renderer's VMA allocator.
+
+pub bridge struct Mesh {
+    // (No standalone constructor — use Renderer.createMesh and Renderer.destroyMesh)
+    // Mesh is a bridge struct so its identity (pointer to MeshBuffers) can be passed
+    // to Renderer.draw as const &Mesh.
+}
+
+// ---- Renderer ----
+// Vulkan renderer: manages swapchain, render pass, depth buffer, pipeline, and per-frame resources.
 
 pub bridge struct Renderer {
     // NOTE: Bridge signature uses tamga_sdl3.WindowHandle (D-08, WIN-13).
-    // If the compiler rejects cross-module types in bridge position, see docs/bugs.txt.
+    // If the compiler rejects cross-module types in bridge position, see docs/bugs.md.
     bridge func create(window_handle: tamga_sdl3.WindowHandle, debug_mode: bool) (Error | Renderer)
     bridge func destroy(self: &Renderer) void
     bridge func beginFrame(self: &Renderer) bool
     bridge func endFrame(self: &Renderer) void
     bridge func setClearColor(self: &Renderer, r: f32, g: f32, b: f32, a: f32) void
+
+    // createMesh allocates vertex and index buffers on the GPU via the renderer's VMA allocator.
+    // vertices: raw byte pointer to packed vertex data (stride = 48 bytes, D-05 format)
+    // vertex_byte_size: total byte size of vertex array (numVertices * 48)
+    // indices: raw byte pointer to u32 index array
+    // index_count: number of indices
+    bridge func createMesh(self: &Renderer, vertices: Ptr(u8), vertex_byte_size: u32, indices: Ptr(u8), index_count: u32) (Error | Mesh)
+
+    // destroyMesh releases the vertex and index buffer allocations.
+    bridge func destroyMesh(self: &Renderer, mesh: const &Mesh) void
+
+    // setCamera updates the per-frame camera UBO.
+    // view: pointer to column-major 4x4 float view matrix (16 floats)
+    // proj: pointer to column-major 4x4 float projection matrix (16 floats)
+    // view_pos: pointer to 3-float camera world position
+    bridge func setCamera(self: &Renderer, view: Ptr(u8), proj: Ptr(u8), view_pos: Ptr(u8)) void
+
+    // draw submits a mesh for rendering with the given model matrix.
+    // mesh: the mesh to draw (read-only borrow)
+    // model_matrix: pointer to column-major 4x4 float model matrix (16 floats, push constant)
+    bridge func draw(self: &Renderer, mesh: const &Mesh, model_matrix: Ptr(u8)) void
 }

@@ -1677,51 +1677,61 @@ pub const Renderer = struct {
         self.ctx.clear_color = .{ .color = .{ .float32 = [4]f32{ r, g, b, a } } };
     }
 
-    pub fn setCamera(self: *Renderer, view: *const [16]f32, proj: *const [16]f32, view_pos: *const [3]f32) void {
+    // setCamera — bridge-callable signature: Ptr(u8) maps to *const anyopaque in Zig.
+    // view: pointer to 16 f32 values (column-major mat4)
+    // proj: pointer to 16 f32 values (column-major mat4)
+    // view_pos: pointer to 3 f32 values (vec3)
+    pub fn setCamera(self: *Renderer, view: *const anyopaque, proj: *const anyopaque, view_pos: *const anyopaque) void {
         const frame = self.ctx.current_frame;
+        const view_mat: *const [16]f32 = @ptrCast(@alignCast(view));
+        const proj_mat: *const [16]f32 = @ptrCast(@alignCast(proj));
+        const vpos: *const [3]f32 = @ptrCast(@alignCast(view_pos));
         const ubo = CameraUBO{
-            .view = view.*,
-            .proj = proj.*,
-            .view_pos = view_pos.*,
+            .view = view_mat.*,
+            .proj = proj_mat.*,
+            .view_pos = vpos.*,
         };
         @memcpy(self.ctx.camera_mapped[frame][0..@sizeOf(CameraUBO)], std.mem.asBytes(&ubo));
     }
 
-    pub fn drawMesh(self: *Renderer, mesh: *const MeshBuffers, model_matrix: *const [16]f32) void {
+    // draw — bridge-callable: draws a Mesh with a model matrix.
+    // mesh: const &Mesh (read-only borrow of the Mesh bridge struct)
+    // model_matrix: Ptr(u8) = pointer to 16 f32 values (column-major mat4)
+    pub fn draw(self: *Renderer, mesh: *const Mesh, model_matrix: *const anyopaque) void {
         const cmd = self.ctx.active_cmd;
         if (cmd == null) return;
 
+        const model_mat: *const [16]f32 = @ptrCast(@alignCast(model_matrix));
         const offset: u64 = 0;
-        c.vkCmdBindVertexBuffers(cmd, 0, 1, &mesh.vertex_buffer, &offset);
-        c.vkCmdBindIndexBuffer(cmd, mesh.index_buffer, 0, c.VK_INDEX_TYPE_UINT32);
-        c.vkCmdPushConstants(cmd, self.ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, 64, model_matrix);
-        c.vkCmdDrawIndexed(cmd, mesh.index_count, 1, 0, 0, 0);
+        c.vkCmdBindVertexBuffers(cmd, 0, 1, &mesh.mesh_buffers.vertex_buffer, &offset);
+        c.vkCmdBindIndexBuffer(cmd, mesh.mesh_buffers.index_buffer, 0, c.VK_INDEX_TYPE_UINT32);
+        c.vkCmdPushConstants(cmd, self.ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, 64, model_mat);
+        c.vkCmdDrawIndexed(cmd, mesh.mesh_buffers.index_count, 1, 0, 0, 0);
     }
 
-    pub fn createMesh(self: *Renderer, vertices: [*]const u8, vertex_byte_size: u32, indices: [*]const u32, index_count: u32) anyerror!MeshBuffers {
-        return createMeshBuffers(&self.ctx, vertices, vertex_byte_size, indices, index_count);
-    }
-
-    pub fn destroyMesh(self: *Renderer, mesh: *MeshBuffers) void {
-        self.ctx.vma_ctx.destroyBuffer(mesh.vertex_buffer, mesh.vertex_allocation);
-        self.ctx.vma_ctx.destroyBuffer(mesh.index_buffer, mesh.index_allocation);
-    }
-};
-
-// ---- bridge export functions for Mesh ----
-// The Orhon bridge calls these as part of the Mesh bridge struct.
-
-pub const Mesh = struct {
-    mesh_buffers: MeshBuffers,
-
-    pub fn create(renderer: *Renderer, vertices: *const anyopaque, vertex_byte_size: u32, indices: *const anyopaque, index_count: u32) anyerror!Mesh {
+    // createMesh: bridge func — allocates GPU vertex + index buffers via VMA.
+    // vertices: raw byte pointer to packed D-05 vertex data
+    // vertex_byte_size: total byte count of vertex array
+    // indices: raw byte pointer to u32 index array
+    // index_count: number of u32 indices
+    pub fn createMesh(self: *Renderer, vertices: *const anyopaque, vertex_byte_size: u32, indices: *const anyopaque, index_count: u32) anyerror!Mesh {
         const vert_ptr: [*]const u8 = @ptrCast(vertices);
         const idx_ptr: [*]const u32 = @ptrCast(@alignCast(indices));
-        const buffers = try renderer.createMesh(vert_ptr, vertex_byte_size, idx_ptr, index_count);
+        const buffers = try createMeshBuffers(&self.ctx, vert_ptr, vertex_byte_size, idx_ptr, index_count);
         return Mesh{ .mesh_buffers = buffers };
     }
 
-    pub fn destroy(self: *Mesh, renderer: *Renderer) void {
-        renderer.destroyMesh(&self.mesh_buffers);
+    // destroyMesh: bridge func — releases vertex and index buffer allocations.
+    pub fn destroyMesh(self: *Renderer, mesh: *const Mesh) void {
+        self.ctx.vma_ctx.destroyBuffer(mesh.mesh_buffers.vertex_buffer, mesh.mesh_buffers.vertex_allocation);
+        self.ctx.vma_ctx.destroyBuffer(mesh.mesh_buffers.index_buffer, mesh.mesh_buffers.index_allocation);
     }
+};
+
+// ---- Mesh bridge struct ----
+// Wraps MeshBuffers. Created/destroyed via Renderer.createMesh and Renderer.destroyMesh.
+// Passed as const &Mesh to Renderer.draw.
+
+pub const Mesh = struct {
+    mesh_buffers: MeshBuffers,
 };

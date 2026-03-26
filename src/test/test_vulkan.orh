@@ -4,10 +4,20 @@ import tamga_sdl3
 import tamga_vk3d
 import std::console
 
-pub func run_vulkan_test() void {
-    console.println("--- Vulkan Renderer Test (Typed API) ---")
+// Vulkan renderer integration test — Plan 02-03.
+//
+// Tests depth-buffered mesh pipeline: Mesh creation, camera UBO, draw via push constants.
+//
+// Vertex format (D-05): vec3 pos + vec3 normal + vec2 uv + vec4 color = 48 bytes per vertex.
+// vertex_byte_size = 3 vertices * 48 bytes = 144 bytes.
+// Matrix/vertex helper functions are bridge functions declared in main.orh,
+// implemented in main.zig — they return pointers to static float arrays.
+// This pattern avoids the need for raw array literals in Orhon.
 
-    // D-12, WIN-10: Error union dispatch — NOT boolean check
+pub func run_vulkan_test() void {
+    console.println("--- Vulkan Renderer Test (Mesh Pipeline) ---")
+
+    // D-12, WIN-10: Error union dispatch
     const initResult = tamga_sdl3.initPlatform()
     if(initResult is Error) {
         console.println("Platform init failed:")
@@ -18,8 +28,8 @@ pub func run_vulkan_test() void {
 
     console.println("SDL3 init: ok")
 
-    // WIN-01: Window with Vulkan flag (8 = SDL Vulkan bit via WindowFlags)
-    const winResult = tamga_sdl3.Window.create("Vulkan Test", 800, 600, 8)
+    // WIN-01: Window with Vulkan flag (8 = SDL_WINDOW_VULKAN)
+    const winResult = tamga_sdl3.Window.create("Vulkan Mesh Test", 800, 600, 8)
     if(winResult is Error) {
         console.println("Window creation failed:")
         console.println(tamga_sdl3.getError())
@@ -44,6 +54,19 @@ pub func run_vulkan_test() void {
 
     ren.setClearColor(0.1, 0.1, 0.15, 1.0)
 
+    // Create a triangle mesh via the renderer.
+    // getTriangleVertices() / getTriangleIndices() are bridge helpers in main.zig
+    // that return pointers to static float/u32 arrays for 3 CCW vertices in D-05 format.
+    // vertex_byte_size = 3 * 48 = 144 bytes
+    const meshResult = ren.createMesh(getTriangleVertices(), 144, getTriangleIndices(), 3)
+    if(meshResult is Error) {
+        console.println("Mesh creation failed")
+        return
+    }
+    const mesh = meshResult.value
+
+    console.println("Triangle mesh created")
+
     // WIN-02, WIN-03, WIN-04: Typed event dispatch with `is` operator
     var running: bool = true
 
@@ -61,7 +84,6 @@ pub func run_vulkan_test() void {
 
             // WIN-04: Keyboard — Escape scancode (SDL3 = 41)
             // NOTE: scancode is u32 because cast(Enum, int) is currently broken.
-            // Compare against Scancode.Escape integer value directly.
             if(ev is tamga_sdl3.KeyDownEvent) {
                 const kd = ev.value
                 if(kd.scancode == 41) {
@@ -71,11 +93,19 @@ pub func run_vulkan_test() void {
         }
 
         if(ren.beginFrame()) {
+            // Set camera: eye at (0, 0, 3) looking at origin, 45deg FOV perspective.
+            // getViewMatrix() / getProjMatrix() / getCameraPos() are bridge helpers in main.zig.
+            ren.setCamera(getViewMatrix(), getProjMatrix(), getCameraPos())
+
+            // Draw the triangle with identity model matrix (push constant via bridge)
+            ren.draw(mesh, getIdentityMatrix())
+
             ren.endFrame()
         }
 
         tamga_sdl3.delayNS(16000000)
     }
 
+    ren.destroyMesh(mesh)
     console.println("Test complete.")
 }
