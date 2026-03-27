@@ -3,9 +3,7 @@ module tamga_vk3d
 #name    = "tamga_vk3d"
 #version = Version(0, 1, 2)
 #build   = static
-#linkC "vulkan"
-#linkC "SDL3"
-#cInclude "vulkan/vulkan.h"
+#cimport "vulkan" { include: "vulkan/vulkan.h" }
 
 import tamga_sdl3
 import tamga_vma

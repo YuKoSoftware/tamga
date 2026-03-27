@@ -3,10 +3,7 @@ module tamga_vma
 #name    = "tamga_vma"
 #version = Version(0, 1, 2)
 #build   = static
-#linkC "vulkan"
-#cInclude "vulkan/vulkan.h"
-#csource "../../src/TamgaVMA/vma_impl.cpp"
-#linkCpp
+#cimport "vma" { include: "vk_mem_alloc.h", source: "../../src/TamgaVMA/vma_impl.cpp" }
 
 // ---- BufferAlloc ----
 // Returned by Allocator.createBuffer. Both fields are opaque pointers.
