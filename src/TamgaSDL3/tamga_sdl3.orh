@@ -3,7 +3,7 @@ module tamga_sdl3
 #name    = "tamga_sdl3"
 #version = Version(0, 1, 0)
 #build   = static
-#cimport "SDL3" { include: "SDL3/SDL.h" }
+#cimport = { name: "SDL3", include: "SDL3/SDL.h" }
 
 // ---- WindowHandle type alias ----
 // Named alias for the raw SDL window pointer.
