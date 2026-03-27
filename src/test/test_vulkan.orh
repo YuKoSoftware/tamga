@@ -72,7 +72,7 @@ pub func run_vulkan_test() void {
 
     while(running) {
         const ev = tamga_sdl3.pollEvent()
-        if(ev is not tamga_sdl3.NoEvent) {
+        if(ev != null) {
 
             // WIN-03: Quit events
             if(ev is tamga_sdl3.QuitEvent) {
@@ -82,11 +82,10 @@ pub func run_vulkan_test() void {
                 running = false
             }
 
-            // WIN-04: Keyboard — Escape scancode (SDL3 = 41)
-            // NOTE: scancode is u32 because cast(Enum, int) is currently broken.
+            // WIN-04: Keyboard — typed enum scancode field
             if(ev is tamga_sdl3.KeyDownEvent) {
                 const kd = ev.value
-                if(kd.scancode == 41) {
+                if(kd.scancode == tamga_sdl3.Scancode.Escape) {
                     running = false
                 }
             }

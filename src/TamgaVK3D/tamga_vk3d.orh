@@ -5,6 +5,7 @@ module tamga_vk3d
 #build   = static
 #linkC "vulkan"
 #linkC "SDL3"
+#cInclude "vulkan/vulkan.h"
 
 import tamga_sdl3
 import tamga_vma
@@ -43,10 +44,7 @@ pub bridge struct Renderer {
     bridge func createMesh(self: &Renderer, vertices: Ptr(u8), vertex_byte_size: u32, indices: Ptr(u8), index_count: u32) (Error | Mesh)
 
     // destroyMesh releases the vertex and index buffer allocations.
-    // destroyMesh releases the vertex and index buffer allocations.
-    // NOTE: Mesh passed by value (not const &Mesh) due to compiler bug — const &BridgeStruct
-    // codegen passes by value anyway. Mesh is small enough that by-value is acceptable.
-    bridge func destroyMesh(self: &Renderer, mesh: Mesh) void
+    bridge func destroyMesh(self: &Renderer, mesh: const &Mesh) void
 
     // setCamera updates the per-frame camera UBO.
     // view: pointer to column-major 4x4 float view matrix (16 floats)
@@ -57,6 +55,5 @@ pub bridge struct Renderer {
     // draw submits a mesh for rendering with the given model matrix.
     // mesh: the mesh to draw
     // model_matrix: pointer to column-major 4x4 float model matrix (16 floats, push constant)
-    // NOTE: Mesh passed by value (not const &Mesh) due to compiler bug.
-    bridge func draw(self: &Renderer, mesh: Mesh, model_matrix: Ptr(u8)) void
+    bridge func draw(self: &Renderer, mesh: const &Mesh, model_matrix: Ptr(u8)) void
 }

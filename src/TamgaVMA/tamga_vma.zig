@@ -1,7 +1,6 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("vulkan/vulkan.h");
-});
+// vulkan_c is the shared @cImport wrapper. Access types via the .c field.
+const c = @import("vulkan_c").c;
 
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 
@@ -423,7 +422,7 @@ pub const VmaContext = struct {
 // These are the functions the Orhon bridge calls. The bridge passes Vulkan handles
 // as *anyopaque (Ptr(u8) on the Orhon side) — cast to the appropriate Vulkan types here.
 
-export fn vma_create(
+pub export fn vma_create(
     instance: *anyopaque,
     physical_device: *anyopaque,
     device: *anyopaque,
@@ -442,12 +441,12 @@ export fn vma_create(
     return c.VK_SUCCESS;
 }
 
-export fn vma_destroy(ctx: *VmaContext) void {
+pub export fn vma_destroy(ctx: *VmaContext) void {
     ctx.destroy();
     std.heap.page_allocator.destroy(ctx);
 }
 
-export fn vma_create_buffer(
+pub export fn vma_create_buffer(
     ctx: *VmaContext,
     size: u64,
     usage: u32,
@@ -461,13 +460,13 @@ export fn vma_create_buffer(
     return c.VK_SUCCESS;
 }
 
-export fn vma_destroy_buffer(ctx: *VmaContext, buffer: *anyopaque, allocation: *anyopaque) void {
+pub export fn vma_destroy_buffer(ctx: *VmaContext, buffer: *anyopaque, allocation: *anyopaque) void {
     const vk_buffer: c.VkBuffer = @ptrCast(buffer);
     const vma_alloc: VmaAllocation = @ptrCast(allocation);
     ctx.destroyBuffer(vk_buffer, vma_alloc);
 }
 
-export fn vma_staging_write(
+pub export fn vma_staging_write(
     ctx: *VmaContext,
     data: *const anyopaque,
     size: u32,

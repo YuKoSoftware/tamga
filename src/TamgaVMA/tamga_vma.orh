@@ -4,6 +4,9 @@ module tamga_vma
 #version = Version(0, 1, 2)
 #build   = static
 #linkC "vulkan"
+#cInclude "vulkan/vulkan.h"
+#csource "../../src/TamgaVMA/vma_impl.cpp"
+#linkCpp
 
 // ---- BufferAlloc ----
 // Returned by Allocator.createBuffer. Both fields are opaque pointers.
@@ -48,7 +51,7 @@ pub bridge struct Allocator {
     // size: byte size of the buffer
     // usage: VkBufferUsageFlags (e.g. VERTEX_BUFFER | TRANSFER_DST)
     // gpu_only: true = device-local (no CPU access); false = host-accessible (UBOs, readback)
-    bridge func createBuffer(self: &Allocator, byte_size: u64, usage: u32, gpu_only: bool) (Error | BufferAlloc)
+    bridge func createBuffer(self: &Allocator, size: u64, usage: u32, gpu_only: bool) (Error | BufferAlloc)
 
     // destroyBuffer releases a buffer and its VMA allocation.
     // buffer: VkBuffer handle (from BufferAlloc.buffer)
@@ -59,5 +62,5 @@ pub bridge struct Allocator {
     // The caller uses StagingRegion.buffer / .offset in a vkCmdCopyBuffer to transfer
     // to a device-local buffer. Ring wraps automatically; oversized uploads use a
     // one-shot allocation and print a debug warning.
-    bridge func stagingWrite(self: &Allocator, data: Ptr(u8), byte_count: u32) (Error | StagingRegion)
+    bridge func stagingWrite(self: &Allocator, data: Ptr(u8), size: u32) (Error | StagingRegion)
 }

@@ -47,7 +47,7 @@ pub func run_sdl3_test() void {
 
     while(running) {
         const ev = tamga_sdl3.pollEvent()
-        if(ev is not tamga_sdl3.NoEvent) {
+        if(ev != null) {
 
             // WIN-03: Quit event
             if(ev is tamga_sdl3.QuitEvent) {
@@ -59,12 +59,10 @@ pub func run_sdl3_test() void {
                 running = false
             }
 
-            // WIN-04: Keyboard with typed event — Escape scancode (SDL3 = 41)
-            // NOTE: scancode is u32 because cast(Enum, int) is currently broken.
-            // Compare against Scancode.Escape integer value directly.
+            // WIN-04: Keyboard with typed enum scancode field
             if(ev is tamga_sdl3.KeyDownEvent) {
                 const kd = ev.value
-                if(kd.scancode == 41) {
+                if(kd.scancode == tamga_sdl3.Scancode.Escape) {
                     running = false
                 }
             }

@@ -1,7 +1,10 @@
 const std = @import("std");
 const vma = @import("tamga_vma_bridge");
-const c = @cImport({
-    @cInclude("vulkan/vulkan.h");
+// Shared Vulkan types module — same @cImport as tamga_vma, so types are identical across modules.
+// Access via .c field: `@import("vulkan_c").c` gives the @cImport result directly.
+const c = @import("vulkan_c").c;
+// SDL types are imported via a local @cImport since SDL headers are only used in this module.
+const sdl = @cImport({
     @cInclude("SDL3/SDL.h");
     @cInclude("SDL3/SDL_vulkan.h");
 });
@@ -132,7 +135,7 @@ const VulkanContext = struct {
     current_frame: u32 = 0,
 
     // SDL window handle
-    sdl_window: ?*c.SDL_Window = null,
+    sdl_window: ?*sdl.SDL_Window = null,
     debug_mode: bool = false,
 
     // render graph
@@ -207,7 +210,7 @@ fn createInstance(ctx: *VulkanContext) c.VkResult {
 
     // get SDL-required extensions
     var sdl_ext_count: u32 = 0;
-    const sdl_exts = c.SDL_Vulkan_GetInstanceExtensions(&sdl_ext_count);
+    const sdl_exts = sdl.SDL_Vulkan_GetInstanceExtensions(&sdl_ext_count);
 
     // build extension list: SDL extensions + debug utils (if debug)
     var extensions: [16][*c]const u8 = undefined;
@@ -305,7 +308,13 @@ fn destroyDebugMessenger(ctx: *VulkanContext) void {
 // ---- surface creation ----
 
 fn createSurface(ctx: *VulkanContext) bool {
-    return c.SDL_Vulkan_CreateSurface(ctx.sdl_window.?, ctx.instance, null, &ctx.surface);
+    // SDL_vulkan.h includes its own copy of vulkan.h, creating separate opaque types.
+    // Use @ptrCast to bridge between the vulkan_c module types and SDL's cImport types.
+    const sdl_instance: sdl.VkInstance = @ptrCast(ctx.instance);
+    var sdl_surface: sdl.VkSurfaceKHR = null;
+    const ok = sdl.SDL_Vulkan_CreateSurface(ctx.sdl_window.?, sdl_instance, null, &sdl_surface);
+    ctx.surface = @ptrCast(sdl_surface);
+    return ok;
 }
 
 // ---- physical device selection ----
@@ -471,14 +480,14 @@ fn chooseSwapPresentMode(modes: []const c.VkPresentModeKHR) c.VkPresentModeKHR {
     return c.VK_PRESENT_MODE_FIFO_KHR;
 }
 
-fn chooseSwapExtent(capabilities: *const c.VkSurfaceCapabilitiesKHR, window: *c.SDL_Window) c.VkExtent2D {
+fn chooseSwapExtent(capabilities: *const c.VkSurfaceCapabilitiesKHR, window: *sdl.SDL_Window) c.VkExtent2D {
     if (capabilities.currentExtent.width != 0xFFFFFFFF) {
         return capabilities.currentExtent;
     }
 
     var w: c_int = 0;
     var h: c_int = 0;
-    _ = c.SDL_GetWindowSizeInPixels(window, &w, &h);
+    _ = sdl.SDL_GetWindowSizeInPixels(window, &w, &h);
 
     return .{
         .width = std.math.clamp(@as(u32, @intCast(w)), capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
@@ -617,8 +626,7 @@ fn createDepthResources(ctx: *VulkanContext) anyerror!void {
         true, // gpu_only: device-local
     );
 
-    // @ptrCast: VMA's @cImport VkImage → VK3D's @cImport VkImage (cross-module type identity)
-    ctx.depth_image = @ptrCast(image_alloc.image);
+    ctx.depth_image = image_alloc.image;
     ctx.depth_allocation = image_alloc.allocation;
 
     // Create image view with DEPTH aspect
@@ -654,7 +662,7 @@ fn destroyDepthResources(ctx: *VulkanContext) void {
         ctx.depth_image_view = null;
     }
     if (ctx.depth_image != null) {
-        ctx.vma_ctx.destroyImage(@ptrCast(ctx.depth_image), ctx.depth_allocation);
+        ctx.vma_ctx.destroyImage(ctx.depth_image, ctx.depth_allocation);
         ctx.depth_image = null;
     }
 }
@@ -1018,13 +1026,13 @@ fn allocatePerFrameDescriptorSets(ctx: *VulkanContext) c.VkResult {
     i = 0;
     while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
         const cam_buf_info = c.VkDescriptorBufferInfo{
-            .buffer = @ptrCast(ctx.camera_ubos[i].buffer),
+            .buffer = ctx.camera_ubos[i].buffer,
             .offset = 0,
             .range = @sizeOf(CameraUBO),
         };
 
         const light_buf_info = c.VkDescriptorBufferInfo{
-            .buffer = @ptrCast(ctx.light_ubos[i].buffer),
+            .buffer = ctx.light_ubos[i].buffer,
             .offset = 0,
             .range = @sizeOf(LightUBO),
         };
@@ -1294,7 +1302,8 @@ fn createMeshBuffers(
     const vert_region = try ctx.vma_ctx.stagingWrite(vertices, vertex_byte_size);
 
     // Upload index data via staging ring
-    const index_region = try ctx.vma_ctx.stagingWrite(@ptrCast(indices), index_byte_size);
+    const idx_bytes: [*]const u8 = @ptrCast(indices);
+    const index_region = try ctx.vma_ctx.stagingWrite(idx_bytes, index_byte_size);
 
     // Record copy commands in a one-shot command buffer
     const cmd_alloc_info = c.VkCommandBufferAllocateInfo{
@@ -1322,8 +1331,7 @@ fn createMeshBuffers(
         .dstOffset = 0,
         .size = vertex_byte_size,
     };
-    // @ptrCast: VMA's @cImport VkBuffer → VK3D's @cImport VkBuffer (cross-module type identity)
-    c.vkCmdCopyBuffer(cmd, @ptrCast(vert_region.buffer), @ptrCast(vertex_alloc.buffer), 1, &vert_copy);
+    c.vkCmdCopyBuffer(cmd, vert_region.buffer, vertex_alloc.buffer, 1, &vert_copy);
 
     // Copy index data
     const index_copy = c.VkBufferCopy{
@@ -1331,7 +1339,7 @@ fn createMeshBuffers(
         .dstOffset = 0,
         .size = index_byte_size,
     };
-    c.vkCmdCopyBuffer(cmd, @ptrCast(index_region.buffer), @ptrCast(index_alloc.buffer), 1, &index_copy);
+    c.vkCmdCopyBuffer(cmd, index_region.buffer, index_alloc.buffer, 1, &index_copy);
 
     _ = c.vkEndCommandBuffer(cmd);
 
@@ -1353,9 +1361,9 @@ fn createMeshBuffers(
     c.vkFreeCommandBuffers(ctx.device, ctx.command_pool, 1, &cmd);
 
     return MeshBuffers{
-        .vertex_buffer = @ptrCast(vertex_alloc.buffer),
+        .vertex_buffer = vertex_alloc.buffer,
         .vertex_allocation = vertex_alloc.allocation,
-        .index_buffer = @ptrCast(index_alloc.buffer),
+        .index_buffer = index_alloc.buffer,
         .index_allocation = index_alloc.allocation,
         .index_count = index_count,
     };
@@ -1388,7 +1396,7 @@ fn recreateSwapchain(ctx: *VulkanContext) bool {
     // handle minimized window
     var w: c_int = 0;
     var h: c_int = 0;
-    _ = c.SDL_GetWindowSizeInPixels(ctx.sdl_window.?, &w, &h);
+    _ = sdl.SDL_GetWindowSizeInPixels(ctx.sdl_window.?, &w, &h);
     if (w == 0 or h == 0) return false;
 
     _ = c.vkDeviceWaitIdle(ctx.device);
@@ -1441,8 +1449,7 @@ pub const Renderer = struct {
         }
 
         // VMA allocator (after logical device)
-        // @ptrCast: VK3D's @cImport Vulkan handles → VMA's @cImport types (cross-module type identity)
-        ctx.vma_ctx = vma.VmaContext.create(@ptrCast(ctx.instance), @ptrCast(ctx.physical_device), @ptrCast(ctx.device)) catch {
+        ctx.vma_ctx = vma.VmaContext.create(ctx.instance, ctx.physical_device, ctx.device) catch {
             return VkBridgeError.VulkanFailed;
         };
         ctx.vma_initialized = true;
@@ -1700,7 +1707,7 @@ pub const Renderer = struct {
     // draw — bridge-callable: draws a Mesh with a model matrix.
     // mesh: const &Mesh (read-only borrow of the Mesh bridge struct)
     // model_matrix: Ptr(u8) = pointer to 16 f32 values (column-major mat4)
-    pub fn draw(self: *Renderer, mesh: Mesh, model_matrix: *const anyopaque) void {
+    pub fn draw(self: *Renderer, mesh: *const Mesh, model_matrix: *const anyopaque) void {
         const cmd = self.ctx.active_cmd;
         if (cmd == null) return;
 
@@ -1726,9 +1733,9 @@ pub const Renderer = struct {
     }
 
     // destroyMesh: bridge func — releases vertex and index buffer allocations.
-    pub fn destroyMesh(self: *Renderer, mesh: Mesh) void {
-        self.ctx.vma_ctx.destroyBuffer(@ptrCast(mesh.mesh_buffers.vertex_buffer), mesh.mesh_buffers.vertex_allocation);
-        self.ctx.vma_ctx.destroyBuffer(@ptrCast(mesh.mesh_buffers.index_buffer), mesh.mesh_buffers.index_allocation);
+    pub fn destroyMesh(self: *Renderer, mesh: *const Mesh) void {
+        self.ctx.vma_ctx.destroyBuffer(mesh.mesh_buffers.vertex_buffer, mesh.mesh_buffers.vertex_allocation);
+        self.ctx.vma_ctx.destroyBuffer(mesh.mesh_buffers.index_buffer, mesh.mesh_buffers.index_allocation);
     }
 };
 

@@ -79,7 +79,7 @@ pub struct Loop {
             // Poll and dispatch all queued events
             while(true) {
                 const ev = pollEvent()
-                if(ev is NoEvent) { break }
+                if(ev == null) { break }
 
                 // Auto-quit on platform-level quit or window close
                 if(ev is QuitEvent) {

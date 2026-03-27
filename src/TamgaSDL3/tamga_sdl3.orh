@@ -105,21 +105,14 @@ pub enum(u8) MouseButton {
 // ---- Event payload structs ----
 // All fields are pub. timestamp is SDL event timestamp in nanoseconds.
 
-// NOTE: scancode and button fields use u32/u8 (raw integer) rather than Scancode/MouseButton
-// enum types. `cast(Enum, int)` codegen is currently broken in the Orhon compiler
-// (generates @intCast instead of @enumFromInt). See docs/bugs.txt.
-// Callers compare directly against Scancode enum values via integer comparison:
-//   kd.scancode == cast(u32, tamga_sdl3.Scancode.Escape)
-// Once fixed, these fields will use Scancode and MouseButton types directly.
-
 pub struct KeyDownEvent {
-    pub scancode: u32
+    pub scancode: Scancode
     pub repeat: bool
     pub timestamp: u64
 }
 
 pub struct KeyUpEvent {
-    pub scancode: u32
+    pub scancode: Scancode
     pub repeat: bool
     pub timestamp: u64
 }
@@ -133,7 +126,7 @@ pub struct MouseMotionEvent {
 }
 
 pub struct MouseButtonEvent {
-    pub button: u8
+    pub button: MouseButton
     pub down: bool
     pub x: f32
     pub y: f32
@@ -233,61 +226,48 @@ const TAG_WINDOW_RESIZED:       u8 = 13
 const TAG_WINDOW_PIXEL_RESIZED: u8 = 14
 const TAG_WINDOW_CLOSE:         u8 = 15
 
-// ---- NoEvent sentinel ----
-// Returned by pollEvent when the event queue is empty.
-// Callers check: `if(ev is not NoEvent) { ... }`
-// NOTE: empty struct construction `NoEvent()` has a codegen bug — using a dummy field.
-// See docs/bugs.txt.
-
-pub struct NoEvent {
-    pub empty: bool
-}
-
 // ---- Event type alias ----
 // Union-of-structs event type. Use `is` dispatch to determine the active variant.
 //
 // Usage:
 //   const ev = tamga_sdl3.pollEvent()
-//   if(ev is not tamga_sdl3.NoEvent) {
+//   if(ev != null) {
 //       if(ev is tamga_sdl3.KeyDownEvent) {
 //           const kd = ev.value
 //           // kd.scancode, kd.repeat, kd.timestamp
 //       }
 //   }
-//
-// NOTE: (null | MultiUnion) codegen is not yet supported by the compiler — null sentinel
-// variant `NoEvent` is used instead. See docs/bugs.txt.
 
-pub const Event: type = (NoEvent | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent)
+pub const Event: type = (null | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent)
 
 // ---- pollEvent ----
 // Polls for the next SDL3 event.
-// Returns NoEvent when the event queue is empty.
+// Returns null when the event queue is empty.
 // Use `is` dispatch on the result to determine the event type.
 
-pub func pollEvent() (NoEvent | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent) {
+pub func pollEvent() (null | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent) {
     var raw = RawEvent.create()
-    if(!raw.poll()) { return NoEvent(empty: false) }
+    if(!raw.poll()) { return null }
     const tag = raw.getTag()
     const ts = raw.getTimestamp()
-    if(tag == TAG_NONE) { return NoEvent(empty: false) }
+    if(tag == TAG_NONE) { return null }
     if(tag == TAG_QUIT) {
         return QuitEvent(timestamp: ts)
     }
     if(tag == TAG_KEY_DOWN) {
-        return KeyDownEvent(scancode: raw.getKeyScancode(), repeat: raw.getKeyRepeat(), timestamp: ts)
+        return KeyDownEvent(scancode: cast(Scancode, raw.getKeyScancode()), repeat: raw.getKeyRepeat(), timestamp: ts)
     }
     if(tag == TAG_KEY_UP) {
-        return KeyUpEvent(scancode: raw.getKeyScancode(), repeat: raw.getKeyRepeat(), timestamp: ts)
+        return KeyUpEvent(scancode: cast(Scancode, raw.getKeyScancode()), repeat: raw.getKeyRepeat(), timestamp: ts)
     }
     if(tag == TAG_MOUSE_MOTION) {
         return MouseMotionEvent(x: raw.getMouseX(), y: raw.getMouseY(), xrel: raw.getMouseXRel(), yrel: raw.getMouseYRel(), timestamp: ts)
     }
     if(tag == TAG_MOUSE_BUTTON_DOWN) {
-        return MouseButtonEvent(button: raw.getMouseButton(), down: true, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
+        return MouseButtonEvent(button: cast(MouseButton, raw.getMouseButton()), down: true, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
     }
     if(tag == TAG_MOUSE_BUTTON_UP) {
-        return MouseButtonEvent(button: raw.getMouseButton(), down: false, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
+        return MouseButtonEvent(button: cast(MouseButton, raw.getMouseButton()), down: false, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
     }
     if(tag == TAG_GAMEPAD_AXIS) {
         return GamepadAxisEvent(gamepad_id: raw.getGamepadWhich(), axis: raw.getGamepadAxis(), value: raw.getGamepadAxisValue(), timestamp: ts)
@@ -316,7 +296,7 @@ pub func pollEvent() (NoEvent | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMot
     if(tag == TAG_WINDOW_CLOSE) {
         return WindowCloseEvent(timestamp: ts)
     }
-    return NoEvent(empty: false)
+    return null
 }
 
 // ---- Window bridge struct ----
