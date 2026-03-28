@@ -220,3 +220,15 @@ Intra-module `is` works correctly — `ev == ._QuitEvent` is generated.
 **Workaround:** None — build natively on Windows, or fix the compiler.
 
 **Fix needed:** In the build.zig codegen for cross-compilation targets, the step name string is uninitialized or points to freed memory. Initialize it properly before passing to `b.step()`.
+
+### `orhon build -fast` leaks cache directory into `bin/`
+
+`orhon build -fast` creates a cache folder inside `bin/` alongside the output binary. Regular `orhon build` correctly puts all cache in `.orh-cache/` and `zig-cache/`.
+
+**Found in:** Phase 2 (tamga_framework optimized build)
+
+**Impact:** `bin/` gets polluted with cache artifacts. Minor but messy — `bin/` should only contain build outputs.
+
+**Workaround:** Manually delete the cache folder from `bin/` after building.
+
+**Fix needed:** The `-fast` code path uses a different output/cache directory configuration than the regular build. Align it to use the same `.orh-cache/` and `zig-cache/` paths.
