@@ -153,6 +153,30 @@ Bridge functions declared in `main.orh` as `bridge func foo()` generate `export 
 
 **Fix needed:** When copying sidecar .zig files to bridge files, ensure all `export fn` declarations also have `pub` visibility, or the codegen should emit `pub export fn` for bridge function implementations.
 
+### Negative float literals rejected as bridge call arguments
+
+`ren.setDirLight(0, -0.5, -1.0, -0.3, ...)` fails with `unexpected '-'`. Negative numeric literals are not valid as direct arguments in bridge function calls.
+
+**Found in:** Phase 2 plan 02-04 (test_vulkan.orh setDirLight)
+
+**Impact:** Cannot pass negative float or integer literals directly as function arguments. Non-bridge calls may have the same limitation.
+
+**Workaround:** Assign to a `const` variable first: `const x: f32 = 0.0 - 0.5`, then pass `x`.
+
+**Fix needed:** Parser should allow unary negation expressions (`-0.5`) in argument position.
+
+### `#cimport` bridge file cannot resolve module-relative include paths
+
+When a sidecar `.zig` file uses `@cInclude("libs/some_header.h")` (a path relative to the source module directory), the generated bridge file at `.orh-cache/generated/` cannot find the header. The Orhon compiler copies the sidecar verbatim without adding a corresponding `addIncludePath` for the source module's directory.
+
+**Found in:** Phase 2 plan 02-04 (tamga_vk3d.zig stb_image include)
+
+**Impact:** Any single-header C library stored alongside the Orhon module (not on the system include path) cannot be used via `@cImport` in a sidecar `.zig` file. Headers must either be on the system path or accessed via `extern fn` declarations.
+
+**Workaround:** Use `extern fn` declarations instead of `@cImport` for the header's types/functions. Provide the C implementation via `#cimport source:` which compiles from the source module directory (where relative paths resolve correctly).
+
+**Fix needed:** When the Orhon compiler copies a sidecar `.zig` to the generated directory, it should also add `addIncludePath(b.path("../../src/ModuleName"))` (or equivalent) so that `@cImport` can find headers relative to the source module.
+
 ### `#cimport source:` does not generate `linkSystemLibrary` for owning module
 
 When a module declares `#cimport = { name: "vulkan", include: "vulkan/vulkan.h", source: "vma_impl.cpp" }`, the generated `build.zig` compiles the C++ source and calls `linkLibCpp()`, but does NOT add `linkSystemLibrary("vulkan")` or `linkLibC()` for that module. Another module with the same `#cimport` name (without `source:`) does get `linkSystemLibrary`.

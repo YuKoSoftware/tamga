@@ -4,18 +4,27 @@ import tamga_sdl3
 import tamga_vk3d
 import std::console
 
-// Vulkan renderer integration test — Plan 02-03.
+// Vulkan renderer integration test — Plan 02-04.
 //
-// Tests depth-buffered mesh pipeline: Mesh creation, camera UBO, draw via push constants.
+// Tests texture mapping, material system, and Phong lighting:
+// - stb_image texture loading
+// - Material descriptor set (diffuse color, specular, shininess, texture sampler)
+// - Directional light UBO
+// - Updated draw() with material parameter
 //
 // Vertex format (D-05): vec3 pos + vec3 normal + vec2 uv + vec4 color = 48 bytes per vertex.
 // vertex_byte_size = 3 vertices * 48 bytes = 144 bytes.
 // Matrix/vertex helper functions are bridge functions declared in main.orh,
 // implemented in main.zig — they return pointers to static float arrays.
 // This pattern avoids the need for raw array literals in Orhon.
+//
+// NOTE: Negative float literals are not valid as direct call arguments in Orhon — use variables.
+// NOTE: defer is not used for tex/mat cleanup — Orhon defer captures by move,
+//       which conflicts with subsequent const-borrow uses of those variables.
+//       Explicit cleanup at each exit point instead.
 
 pub func run_vulkan_test() void {
-    console.println("--- Vulkan Renderer Test (Mesh Pipeline) ---")
+    console.println("--- Vulkan Renderer Test (Texture + Material + Lighting) ---")
 
     // D-12, WIN-10: Error union dispatch
     const initResult = tamga_sdl3.initPlatform()
@@ -29,7 +38,7 @@ pub func run_vulkan_test() void {
     console.println("SDL3 init: ok")
 
     // WIN-01: Window with Vulkan flag (0x10000000 = SDL_WINDOW_VULKAN in SDL3)
-    const winResult = tamga_sdl3.Window.create("Vulkan Mesh Test", 800, 600, 268435456)
+    const winResult = tamga_sdl3.Window.create("Vulkan Texture+Lighting Test", 800, 600, 268435456)
     if(winResult is Error) {
         console.println("Window creation failed:")
         console.println(tamga_sdl3.getError())
@@ -50,31 +59,58 @@ pub func run_vulkan_test() void {
     defer { ren.destroy() }
 
     console.println("Vulkan renderer: ok")
-    console.println("Window open — press ESC or close to quit")
 
     ren.setClearColor(0.1, 0.1, 0.15, 1.0)
 
+    // Load a 2x2 checkerboard test texture (PNG, red/green/blue/white)
+    const texResult = ren.loadTexture("src/test/assets/test_texture.png")
+    if(texResult is Error) {
+        console.println("Texture load failed")
+        return
+    }
+    const tex = texResult.value
+
+    console.println("Texture loaded: ok")
+
+    // Create a material: warm diffuse tint, moderate specular, texture bound
+    const matResult = ren.createMaterial(1.0, 0.8, 0.6, 1.0, 0.5, 32.0, tex)
+    if(matResult is Error) {
+        console.println("Material creation failed")
+        ren.destroyTexture(tex)
+        return
+    }
+    const mat = matResult.value
+
+    console.println("Material created: ok")
+
+    // Set up one directional light (key light from upper-left front).
+    const light_dir_x: f32 = 0.0 - 0.5
+    const light_dir_y: f32 = 0.0 - 1.0
+    const light_dir_z: f32 = 0.0 - 0.3
+    ren.setDirLight(0, light_dir_x, light_dir_y, light_dir_z, 1.0, 1.0, 0.9)
+    ren.setLightCounts(1, 0)
+
+    console.println("Directional light configured")
+
     // Create a triangle mesh via the renderer.
-    // getTriangleVertices() / getTriangleIndices() are bridge helpers in main.zig
-    // that return pointers to static float/u32 arrays for 3 CCW vertices in D-05 format.
-    // vertex_byte_size = 3 * 48 = 144 bytes
     const meshResult = ren.createMesh(getTriangleVertices(), 144, getTriangleIndices(), 3)
     if(meshResult is Error) {
         console.println("Mesh creation failed")
+        ren.destroyMaterial(mat)
+        ren.destroyTexture(tex)
         return
     }
     const mesh = meshResult.value
 
     console.println("Triangle mesh created")
+    console.println("Window open — press ESC or close to quit")
 
-    // WIN-02, WIN-03, WIN-04: Typed event dispatch with `is` operator
     var running: bool = true
 
     while(running) {
         const ev = tamga_sdl3.pollEvent()
         if(ev != null) {
 
-            // WIN-03: Quit events
             if(ev is tamga_sdl3.QuitEvent) {
                 running = false
             }
@@ -82,7 +118,6 @@ pub func run_vulkan_test() void {
                 running = false
             }
 
-            // WIN-04: Keyboard — typed enum scancode field
             if(ev is tamga_sdl3.KeyDownEvent) {
                 const kd = ev.value
                 if(kd.scancode == tamga_sdl3.Scancode.Escape) {
@@ -92,13 +127,8 @@ pub func run_vulkan_test() void {
         }
 
         if(ren.beginFrame()) {
-            // Set camera: eye at (0, 0, 3) looking at origin, 45deg FOV perspective.
-            // getViewMatrix() / getProjMatrix() / getCameraPos() are bridge helpers in main.zig.
             ren.setCamera(getViewMatrix(), getProjMatrix(), getCameraPos())
-
-            // Draw the triangle with identity model matrix (push constant via bridge)
-            ren.draw(mesh, getIdentityMatrix())
-
+            ren.draw(mesh, mat, getIdentityMatrix())
             ren.endFrame()
         }
 
@@ -106,5 +136,7 @@ pub func run_vulkan_test() void {
     }
 
     ren.destroyMesh(mesh)
+    ren.destroyMaterial(mat)
+    ren.destroyTexture(tex)
     console.println("Test complete.")
 }

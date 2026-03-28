@@ -7,11 +7,14 @@ const sdl = @cImport({
     @cInclude("SDL3/SDL_vulkan.h");
 });
 // stb_image: single-header C library for PNG/JPG/BMP texture loading.
-// Kept in a separate @cImport to avoid C++ include conflicts with Vulkan headers.
-const stbi = @cImport({
-    @cDefine("STB_IMAGE_IMPLEMENTATION", "1");
-    @cInclude("libs/stb_image.h");
-});
+// Implementation is compiled via stb_image_impl.c (added as a C source via #cimport source:).
+// Using extern declarations avoids the @cImport path-resolution issue in the generated bridge:
+// the bridge file lives in .orh-cache/generated/ and cannot resolve relative "libs/stb_image.h".
+const stbi = struct {
+    pub extern fn stbi_load(filename: [*:0]const u8, x: *c_int, y: *c_int, comp: *c_int, req_comp: c_int) ?[*]u8;
+    pub extern fn stbi_image_free(retval_from_stbi_load: ?[*]u8) void;
+    pub extern fn stbi_failure_reason() [*:0]const u8;
+};
 
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 
@@ -2241,14 +2244,21 @@ pub const Renderer = struct {
     }
 
     // loadTexture: bridge func — loads a texture from a PNG/JPG file via stb_image.
-    // path: null-terminated C string path to the image file.
-    pub fn loadTexture(self: *Renderer, path: [*:0]const u8) anyerror!Texture {
-        return textureLoad(&self.ctx, path);
+    // path: Orhon String slice ([]const u8) — converted to null-terminated for stbi_load.
+    pub fn loadTexture(self: *Renderer, path: []const u8) anyerror!Texture {
+        // Convert Orhon String slice to null-terminated C string for stbi_load.
+        // Use a stack buffer for paths up to 1023 bytes (covers all practical file paths).
+        var path_buf: [1024]u8 = undefined;
+        const len = @min(path.len, path_buf.len - 1);
+        @memcpy(path_buf[0..len], path[0..len]);
+        path_buf[len] = 0;
+        return textureLoad(&self.ctx, @ptrCast(&path_buf));
     }
 
     // destroyTexture: bridge func — releases texture GPU resources.
-    pub fn destroyTexture(self: *Renderer, tex: *Texture) void {
-        textureFree(&self.ctx, tex);
+    // Takes const pointer to match bridge safety rules; casts to mutable internally.
+    pub fn destroyTexture(self: *Renderer, tex: *const Texture) void {
+        textureFree(&self.ctx, @constCast(tex));
     }
 
     // getDefaultTexture: returns a pointer to the built-in 1x1 white texture.
@@ -2261,7 +2271,8 @@ pub const Renderer = struct {
     // diffuse_r/g/b/a: RGBA diffuse color multiplier (1,1,1,1 = texture color unmodified)
     // specular: specular intensity (0.0 = no specular, 1.0 = full)
     // shininess: Phong shininess exponent (e.g. 32.0 = moderately shiny)
-    // texture: read-only borrow — caller owns the texture lifetime
+    // texture: passed by value — Orhon compiler does not auto-borrow bridge structs in
+    //   error-union-returning calls; value copy is safe since Texture fields are GPU handles.
     pub fn createMaterial(
         self: *Renderer,
         diffuse_r: f32,
@@ -2270,14 +2281,15 @@ pub const Renderer = struct {
         diffuse_a: f32,
         specular: f32,
         shininess: f32,
-        texture: *const Texture,
+        texture: Texture,
     ) anyerror!Material {
-        return materialCreate(&self.ctx, diffuse_r, diffuse_g, diffuse_b, diffuse_a, specular, shininess, texture);
+        return materialCreate(&self.ctx, diffuse_r, diffuse_g, diffuse_b, diffuse_a, specular, shininess, &texture);
     }
 
     // destroyMaterial: bridge func — releases material GPU resources.
-    pub fn destroyMaterial(self: *Renderer, mat: *Material) void {
-        materialFree(&self.ctx, mat);
+    // Takes const pointer to match bridge safety rules; casts to mutable internally.
+    pub fn destroyMaterial(self: *Renderer, mat: *const Material) void {
+        materialFree(&self.ctx, @constCast(mat));
     }
 
     // setDirLight: sets a directional light at the given index (0..3).
