@@ -1000,44 +1000,28 @@ fn createSyncObjects(ctx: *VulkanContext) c.VkResult {
 
 // ---- .spv shader loading ----
 
-fn loadShaderModule(device: c.VkDevice, path: [*:0]const u8) ?c.VkShaderModule {
-    const file = std.fs.cwd().openFileZ(path, .{}) catch |err| {
-        std.debug.print("[TamgaVK3D] Failed to open shader: {s} ({any})\n", .{ path, err });
-        return null;
-    };
-    defer file.close();
-
-    const file_size = file.getEndPos() catch return null;
-    if (file_size == 0 or file_size > 1024 * 1024) {
-        std.debug.print("[TamgaVK3D] Shader file size invalid: {s} ({d} bytes)\n", .{ path, file_size });
-        return null;
-    }
-
-    // Allocate buffer aligned to u32 as required by Vulkan spec
-    const allocator = std.heap.page_allocator;
-    const buf = allocator.alloc(u8, file_size) catch return null;
-    defer allocator.free(buf);
-
-    const bytes_read = file.readAll(buf) catch return null;
-    if (bytes_read != file_size) return null;
+fn createShaderModule(device: c.VkDevice, bytecode: []const u8) ?c.VkShaderModule {
+    if (bytecode.len == 0) return null;
 
     const shader_info = c.VkShaderModuleCreateInfo{
         .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .pNext = null,
         .flags = 0,
-        .codeSize = file_size,
-        .pCode = @ptrCast(@alignCast(buf.ptr)),
+        .codeSize = bytecode.len,
+        .pCode = @ptrCast(@alignCast(bytecode.ptr)),
     };
 
     var shader_module: c.VkShaderModule = null;
     const result = c.vkCreateShaderModule(device, &shader_info, null, &shader_module);
-    if (result != c.VK_SUCCESS) {
-        std.debug.print("[TamgaVK3D] vkCreateShaderModule failed: {s}\n", .{path});
-        return null;
-    }
+    if (result != c.VK_SUCCESS) return null;
 
     return shader_module;
 }
+
+// Embedded SPIR-V bytecode — compiled offline, baked into the binary via shaders_spv.c.
+// No filesystem access needed at runtime; binary is fully portable.
+extern "c" fn get_mesh_vert_spv(out_len: *c_uint) [*]const u8;
+extern "c" fn get_mesh_frag_spv(out_len: *c_uint) [*]const u8;
 
 // ---- descriptor set layouts ----
 
@@ -1243,15 +1227,19 @@ fn allocatePerFrameDescriptorSets(ctx: *VulkanContext) c.VkResult {
 // ---- graphics pipeline ----
 
 fn createGraphicsPipeline(ctx: *VulkanContext) anyerror!void {
-    // Load .spv shader modules
-    const vert_module = loadShaderModule(ctx.device, "src/shaders/mesh.vert.spv") orelse {
-        std.debug.print("[TamgaVK3D] Failed to load mesh.vert.spv\n", .{});
+    // Create shader modules from embedded SPIR-V bytecode (baked in via shaders_spv.c)
+    var vert_len: c_uint = 0;
+    const vert_ptr = get_mesh_vert_spv(&vert_len);
+    const vert_module = createShaderModule(ctx.device, vert_ptr[0..vert_len]) orelse {
+        std.debug.print("[TamgaVK3D] Failed to create vertex shader module\n", .{});
         return VkBridgeError.VulkanFailed;
     };
     defer c.vkDestroyShaderModule(ctx.device, vert_module, null);
 
-    const frag_module = loadShaderModule(ctx.device, "src/shaders/mesh.frag.spv") orelse {
-        std.debug.print("[TamgaVK3D] Failed to load mesh.frag.spv\n", .{});
+    var frag_len: c_uint = 0;
+    const frag_ptr = get_mesh_frag_spv(&frag_len);
+    const frag_module = createShaderModule(ctx.device, frag_ptr[0..frag_len]) orelse {
+        std.debug.print("[TamgaVK3D] Failed to create fragment shader module\n", .{});
         return VkBridgeError.VulkanFailed;
     };
     defer c.vkDestroyShaderModule(ctx.device, frag_module, null);

@@ -224,7 +224,8 @@ A comprehensive collection of multimedia, gaming, and GUI libraries for the Orho
 <!-- GSD:conventions-start source:CONVENTIONS.md -->
 ## Conventions
 
-Conventions not yet established. Will populate as patterns emerge during development.
+- **Test binaries must be portable** — they should run from any working directory without errors. Embed assets (shaders, data) into the binary via C translation units + extern accessors. File-path-dependent resources (textures loaded at runtime) should use exe-relative paths or be clearly documented as requiring a specific CWD.
+- **Shaders are embedded** — SPIR-V bytecode is baked into the binary via `shaders_spv.c` (included from `stb_image_impl.c`). No loose `.spv` files needed at runtime. When adding new shaders, regenerate `shaders_spv.c`.
 <!-- GSD:conventions-end -->
 
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
