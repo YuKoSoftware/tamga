@@ -224,8 +224,9 @@ A comprehensive collection of multimedia, gaming, and GUI libraries for the Orho
 <!-- GSD:conventions-start source:CONVENTIONS.md -->
 ## Conventions
 
-- **Test binaries must be portable** — they should run from any working directory without errors. Embed assets (shaders, data) into the binary via C translation units + extern accessors. File-path-dependent resources (textures loaded at runtime) should use exe-relative paths or be clearly documented as requiring a specific CWD.
+- **Test binaries must be portable** — they should run from any working directory without errors. Embed assets (shaders, data) into the binary via C translation units + extern accessors. Runtime-loaded files (textures) use short paths relative to CWD (`"assets/test_texture.png"`).
 - **Shaders are embedded** — SPIR-V bytecode is baked into the binary via `shaders_spv.c` (included from `stb_image_impl.c`). No loose `.spv` files needed at runtime. When adding new shaders, regenerate `shaders_spv.c`.
+- **Asset workflow** — Runtime assets (textures, models) live in `assets/` at the project root. Test binaries reference them as `"assets/..."`. To test from another location, copy `bin/tamga_test` + `assets/` together. Until `#assets` directive exists in the compiler, this is manual.
 <!-- GSD:conventions-end -->
 
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
