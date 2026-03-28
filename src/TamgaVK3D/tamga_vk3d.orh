@@ -1,7 +1,7 @@
 module tamga_vk3d
 
 #name    = "tamga_vk3d"
-#version = Version(0, 1, 4)
+#version = Version(0, 1, 5)
 #build   = static
 #cimport = { name: "vulkan", include: "vulkan/vulkan.h" }
 #cimport = { name: "stb_image", include: "stb_image.h", source: "../../src/TamgaVK3D/stb_image_impl.c" }

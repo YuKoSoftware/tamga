@@ -1,7 +1,7 @@
 module tamga_vulkan
 
 #name    = "tamga_vulkan"
-#version = Version(0, 1, 1)
+#version = Version(0, 1, 2)
 #build   = static
 #cimport = { name: "vulkan", include: "vulkan/vulkan.h", source: "../../src/TamgaVulkan/vma_impl.cpp" }
 
