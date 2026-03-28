@@ -2,6 +2,16 @@
 
 ## Fixed
 
+### Cross-module `@cImport` type identity
+**Fixed in:** `#cimport` unification
+
+The compiler now generates a single shared `@cImport` wrapper module (e.g., `_vulkan_c.zig`) for all modules that declare the same `#cimport` name. Types are identical across modules — no more `@ptrCast` at module boundaries.
+
+### No mechanism to compile C/C++ source files in module
+**Fixed in:** `#cimport source:` field
+
+`#cimport = { name: "...", include: "...", source: "file.cpp" }` compiles the source file and links it into the module. `linkLibCpp()` is added automatically for C++ sources.
+
 ### Error messages now include source file name
 **Fixed in:** v0.8.0
 
@@ -143,26 +153,12 @@ Bridge functions declared in `main.orh` as `bridge func foo()` generate `export 
 
 **Fix needed:** When copying sidecar .zig files to bridge files, ensure all `export fn` declarations also have `pub` visibility, or the codegen should emit `pub export fn` for bridge function implementations.
 
-### Cross-module `@cImport` type identity (Zig limitation)
+### `#cimport source:` does not generate `linkSystemLibrary` for owning module
 
-When multiple modules use `#linkC "vulkan"`, each Zig sidecar gets its own `@cImport({@cInclude("vulkan/vulkan.h")})`. Zig creates distinct opaque types per `@cImport` unit, so `VkBuffer` from module A ≠ `VkBuffer` from module B.
+When a module declares `#cimport = { name: "vulkan", include: "vulkan/vulkan.h", source: "vma_impl.cpp" }`, the generated `build.zig` compiles the C++ source and calls `linkLibCpp()`, but does NOT add `linkSystemLibrary("vulkan")` or `linkLibC()` for that module. Another module with the same `#cimport` name (without `source:`) does get `linkSystemLibrary`.
 
-**Found in:** Phase 2 (tamga_vk3d using tamga_vma types in Vulkan calls)
+**Found in:** tamga_vulkan module (owns Vulkan cimport + VMA C++ source)
 
-**Impact:** All Vulkan handle types (VkBuffer, VkImage, VkInstance, etc.) must be `@ptrCast`'d when crossing module boundaries in Zig sidecars.
+**Impact:** The C++ source may fail to find system headers (e.g., `vulkan/vulkan.h`) on systems where `linkLibCpp()` alone doesn't provide the include path. Currently works on Solus because C++ includes transitively expose Vulkan headers.
 
-**Workaround:** Added `@ptrCast` at every cross-module Vulkan handle boundary in tamga_vk3d.zig.
-
-**Fix needed:** Consider generating a shared `@cImport` module for all sidecars that `#linkC` the same library (e.g., all modules with `#linkC "vulkan"` share one `vulkan_c` import module). This would eliminate the need for manual `@ptrCast` at module boundaries.
-
-### No mechanism to compile C/C++ source files in module
-
-When a module needs a C/C++ implementation file (e.g., VMA requires `vma_impl.cpp` compiled separately), there is no Orhon directive to include it in the build. The generated `build.zig` has no `addCSourceFiles` or `addObjectFile` step.
-
-**Found in:** Phase 2 (tamga_vma module — VMA implementation is C++)
-
-**Impact:** Must manually patch the generated `build.zig` to add object files and re-link after every `orhon build`. Also, the generated build.zig doesn't `exe.linkLibrary(lib_tamga_vma)` for the executable — only `lib_tamga_vk3d` is linked, but VMA symbols are resolved at exe link time.
-
-**Workaround:** Pre-compile `vma_impl.cpp` with `zig c++`, patch generated `build.zig` to add `addObjectFile`, `linkLibCpp`, and `linkLibrary(lib_tamga_vma)`, then run `zig build` directly.
-
-**Fix needed:** Add a directive like `#csource "vma_impl.cpp"` or `#object "libs/vma_impl.o"` that the codegen includes in the generated `build.zig`. Also ensure transitive library dependencies are linked to the executable (if A depends on B static lib, the exe linking A should also link B).
+**Fix needed:** When `#cimport` has a `source:` field, the generated `build.zig` should also add `linkSystemLibrary(name)` and `linkLibC()` for that module — same as it does for modules that declare `#cimport` without `source:`.

@@ -1,7 +1,5 @@
 const std = @import("std");
-const vma = @import("tamga_vma_bridge");
-// Shared Vulkan types module — same @cImport as tamga_vma, so types are identical across modules.
-// Access via .c field: `@import("vulkan_c").c` gives the @cImport result directly.
+const vma = @import("tamga_vulkan_bridge");
 const c = @import("vulkan_c").c;
 // SDL types are imported via a local @cImport since SDL headers are only used in this module.
 const sdl = @cImport({

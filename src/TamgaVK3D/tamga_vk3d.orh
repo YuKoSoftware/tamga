@@ -1,12 +1,12 @@
 module tamga_vk3d
 
 #name    = "tamga_vk3d"
-#version = Version(0, 1, 2)
+#version = Version(0, 1, 3)
 #build   = static
 #cimport = { name: "vulkan", include: "vulkan/vulkan.h" }
 
 import tamga_sdl3
-import tamga_vma
+import tamga_vulkan
 
 // ---- Mesh ----
 // GPU vertex + index buffer pair, allocated via VMA.
