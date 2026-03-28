@@ -81,17 +81,8 @@ Workaround removed in Phase 1 cleanup (260326-h4x) — WindowHandle wrapper stru
 ### ~~Empty struct construction `TypeName()` generates invalid Zig~~ FIXED
 **Fixed in:** v0.14 Phase 20 — codegen now emits `TypeName{}` for zero-field structs.
 
-### Multi-file module with Zig sidecar: "file exists in modules 'root' and 'tamga_sdl3'"
-
-`orhon build` fails with `internal codegen error: tamga_sdl3.zig:1:1: error: file exists in modules 'root' and 'tamga_sdl3'` when a module has multiple .orh files and a Zig sidecar.
-
-**Found in:** Phase 2 plan 02-01 (TamgaVMA creation triggered rebuild that exposed this)
-
-**Impact:** `orhon build` fails for the main executable when tamga_sdl3 module is present. This was pre-existing before TamgaVMA — confirmed by reverting TamgaVMA changes and reproducing the error.
-
-**Root cause:** The Zig sidecar file (`tamga_sdl3.zig`) is being added to the build graph as both a module root file AND as a file within the `tamga_sdl3` module. Likely the codegen iterates all .zig files in a module directory and picks them up twice — once as a sidecar and once as a free-standing Zig file.
-
-**Fix needed:** In the build system codegen, when a module has a sidecar .zig file (same name as the anchor .orh file), only add it as the module's bridge file — do NOT add it to the root build graph as a standalone file.
+### ~~Multi-file module with Zig sidecar: "file exists in two modules"~~ FIXED
+**Fixed in:** v0.16 Phase 27 — infinite loop in sidecar pub-fixup fixed; sidecar deduplication prevents duplicate module registration.
 
 ### ~~`size` is a reserved keyword in bridge func parameters~~ FIXED
 **Fixed in:** PEG grammar — `param_name` rule allows `size` and other builtin keywords in parameter position.
@@ -119,51 +110,17 @@ Non-error-union bridge functions correctly pass structs by value.
 ### ~~Negative float literals rejected as bridge call arguments~~ FIXED
 **Fixed in:** v0.16 Phase 26 — unary `-` added to PEG grammar's `unary_expr` rule. Negative literals now valid as function arguments.
 
-### `#cimport` bridge file cannot resolve module-relative include paths
+### ~~`#cimport` bridge file cannot resolve module-relative include paths~~ FIXED
+**Fixed in:** v0.16 Phase 27 — `addIncludePath` emitted for source module directory so sidecar `@cInclude` resolves module-relative headers.
 
-When a sidecar `.zig` file uses `@cInclude("libs/some_header.h")` (a path relative to the source module directory), the generated bridge file at `.orh-cache/generated/` cannot find the header. The Orhon compiler copies the sidecar verbatim without adding a corresponding `addIncludePath` for the source module's directory.
-
-**Found in:** Phase 2 plan 02-04 (tamga_vk3d.zig stb_image include)
-
-**Impact:** Any single-header C library stored alongside the Orhon module (not on the system include path) cannot be used via `@cImport` in a sidecar `.zig` file. Headers must either be on the system path or accessed via `extern fn` declarations.
-
-**Workaround:** Use `extern fn` declarations instead of `@cImport` for the header's types/functions. Provide the C implementation via `#cimport source:` which compiles from the source module directory (where relative paths resolve correctly).
-
-**Fix needed:** When the Orhon compiler copies a sidecar `.zig` to the generated directory, it should also add `addIncludePath(b.path("../../src/ModuleName"))` (or equivalent) so that `@cImport` can find headers relative to the source module.
-
-### `#cimport source:` does not generate `linkSystemLibrary` for owning module
-
-When a module declares `#cimport = { name: "vulkan", include: "vulkan/vulkan.h", source: "vma_impl.cpp" }`, the generated `build.zig` compiles the C++ source and calls `linkLibCpp()`, but does NOT add `linkSystemLibrary("vulkan")` or `linkLibC()` for that module. Another module with the same `#cimport` name (without `source:`) does get `linkSystemLibrary`.
-
-**Found in:** tamga_vulkan module (owns Vulkan cimport + VMA C++ source)
-
-**Impact:** The C++ source may fail to find system headers (e.g., `vulkan/vulkan.h`) on systems where `linkLibCpp()` alone doesn't provide the include path. Currently works on Solus because C++ includes transitively expose Vulkan headers.
-
-**Fix needed:** When `#cimport` has a `source:` field, the generated `build.zig` should also add `linkSystemLibrary(name)` and `linkLibC()` for that module — same as it does for modules that declare `#cimport` without `source:`.
+### ~~`#cimport source:` does not generate `linkSystemLibrary` for owning module~~ FIXED
+**Fixed in:** v0.16 Phase 27 — `linkSystemLibrary` now emitted unconditionally for all `#cimport` names regardless of `source:` field.
 
 ### ~~Cross-module `is` operator generates `@TypeOf` comparison instead of tagged union check~~ FIXED
 **Fixed in:** v0.16 Phase 26 — both AST and MIR codegen paths now check `arbitrary_union` type class and emit `val == ._TypeName` for cross-module tagged union checks. Workaround bridge helpers (pollEventTag, getLastScancode) are now obsolete.
 
-### Cross-compilation `-win_x64` passes garbled step name to Zig build
+### ~~Cross-compilation `-win_x64` passes garbled step name~~ FIXED
+**Fixed in:** v0.16 Phase 28 — use-after-free in `target_flag` allocation fixed; `defer` moved outside `if` block so string lives until `runZigIn` reads it.
 
-`orhon build -win_x64` fails with `no step named '�����������������������'`. The compiler passes a corrupted/uninitialized string as the Zig build step name for the Windows x64 target.
-
-**Found in:** Phase 2 (tamga_framework cross-compile attempt)
-
-**Impact:** Cannot cross-compile for Windows. Likely affects all cross-compile targets (`-linux_x64` from non-Linux may also be broken).
-
-**Workaround:** None — build natively on Windows, or fix the compiler.
-
-**Fix needed:** In the build.zig codegen for cross-compilation targets, the step name string is uninitialized or points to freed memory. Initialize it properly before passing to `b.step()`.
-
-### `orhon build -fast` leaks cache directory into `bin/`
-
-`orhon build -fast` creates a cache folder inside `bin/` alongside the output binary. Regular `orhon build` correctly puts all cache in `.orh-cache/` and `zig-cache/`.
-
-**Found in:** Phase 2 (tamga_framework optimized build)
-
-**Impact:** `bin/` gets polluted with cache artifacts. Minor but messy — `bin/` should only contain build outputs.
-
-**Workaround:** Manually delete the cache folder from `bin/` after building.
-
-**Fix needed:** The `-fast` code path uses a different output/cache directory configuration than the regular build. Align it to use the same `.orh-cache/` and `zig-cache/` paths.
+### ~~`orhon build -fast` leaks cache directory into `bin/`~~ FIXED
+**Fixed in:** v0.16 Phase 28 — cache cleanup now removes `zig-out`, `.zig-cache`, and `zig-cache` from both generated and project root directories.
