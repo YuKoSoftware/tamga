@@ -112,6 +112,12 @@ const VulkanContext = struct {
     swapchain_format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
     swapchain_extent: c.VkExtent2D = .{ .width = 0, .height = 0 },
 
+    // MSAA
+    msaa_samples: c.VkSampleCountFlagBits = c.VK_SAMPLE_COUNT_1_BIT,
+    msaa_color_image: c.VkImage = null,
+    msaa_color_view: c.VkImageView = null,
+    msaa_color_allocation: vma.VmaAllocation = undefined,
+
     // depth buffer
     depth_image: c.VkImage = null,
     depth_image_view: c.VkImageView = null,
@@ -174,6 +180,23 @@ const VulkanContext = struct {
 
 fn makeVersion(major: u32, minor: u32, patch: u32) u32 {
     return (major << 22) | (minor << 12) | patch;
+}
+
+// getMaxUsableSampleCount returns the highest sample count supported for both
+// color and depth attachments, capped at VK_SAMPLE_COUNT_4_BIT per VK3-16
+// (general cross-vendor performance optimization — 4x is the sweet spot for
+// quality/performance on all hardware tiers).
+fn getMaxUsableSampleCount(physical_device: c.VkPhysicalDevice) c.VkSampleCountFlagBits {
+    var props: c.VkPhysicalDeviceProperties = undefined;
+    c.vkGetPhysicalDeviceProperties(physical_device, &props);
+
+    const counts = props.limits.framebufferColorSampleCounts &
+        props.limits.framebufferDepthSampleCounts;
+
+    // Check 4x first (our cap per VK3-16), then fall back to lower counts
+    if (counts & c.VK_SAMPLE_COUNT_4_BIT != 0) return c.VK_SAMPLE_COUNT_4_BIT;
+    if (counts & c.VK_SAMPLE_COUNT_2_BIT != 0) return c.VK_SAMPLE_COUNT_2_BIT;
+    return c.VK_SAMPLE_COUNT_1_BIT;
 }
 
 fn validationLayerAvailable() bool {
@@ -615,13 +638,14 @@ fn findDepthFormat(physical_device: c.VkPhysicalDevice) c.VkFormat {
 fn createDepthResources(ctx: *VulkanContext) anyerror!void {
     ctx.depth_format = findDepthFormat(ctx.physical_device);
 
-    // Create depth image via VMA (DEVICE_LOCAL, DEPTH_STENCIL_ATTACHMENT usage)
-    const image_alloc = try ctx.vma_ctx.createImage(
+    // Create depth image via VMA with MSAA sample count
+    const image_alloc = try ctx.vma_ctx.createImageWithSamples(
         ctx.swapchain_extent.width,
         ctx.swapchain_extent.height,
         ctx.depth_format,
         c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
         true, // gpu_only: device-local
+        ctx.msaa_samples,
     );
 
     ctx.depth_image = image_alloc.image;
@@ -665,31 +689,102 @@ fn destroyDepthResources(ctx: *VulkanContext) void {
     }
 }
 
+// ---- MSAA color attachment ----
+
+fn createMsaaColorResources(ctx: *VulkanContext) anyerror!void {
+    // TRANSIENT_ATTACHMENT: GPU can use tile memory — never needs to be written to system RAM
+    // COLOR_ATTACHMENT: needed for use as render target before resolve
+    const usage = c.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+    const image_alloc = try ctx.vma_ctx.createImageWithSamples(
+        ctx.swapchain_extent.width,
+        ctx.swapchain_extent.height,
+        ctx.swapchain_format,
+        usage,
+        true, // gpu_only: device-local
+        ctx.msaa_samples,
+    );
+
+    ctx.msaa_color_image = image_alloc.image;
+    ctx.msaa_color_allocation = image_alloc.allocation;
+
+    const view_info = c.VkImageViewCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .image = ctx.msaa_color_image,
+        .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+        .format = ctx.swapchain_format,
+        .components = .{
+            .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+        },
+        .subresourceRange = .{
+            .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
+
+    const result = c.vkCreateImageView(ctx.device, &view_info, null, &ctx.msaa_color_view);
+    if (result != c.VK_SUCCESS) return VkBridgeError.VulkanFailed;
+}
+
+fn destroyMsaaColorResources(ctx: *VulkanContext) void {
+    if (ctx.msaa_color_view != null) {
+        c.vkDestroyImageView(ctx.device, ctx.msaa_color_view, null);
+        ctx.msaa_color_view = null;
+    }
+    if (ctx.msaa_color_image != null) {
+        ctx.vma_ctx.destroyImage(ctx.msaa_color_image, ctx.msaa_color_allocation);
+        ctx.msaa_color_image = null;
+    }
+}
+
 // ---- render pass (with depth attachment) ----
 
 fn createRenderPass(ctx: *VulkanContext) c.VkResult {
-    const color_attachment = c.VkAttachmentDescription{
+    // Attachment [0]: MSAA color — rendered to, not stored (resolved to swapchain)
+    const msaa_color_attachment = c.VkAttachmentDescription{
         .flags = 0,
         .format = ctx.swapchain_format,
-        .samples = c.VK_SAMPLE_COUNT_1_BIT,
+        .samples = ctx.msaa_samples,
         .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+        .storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .finalLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
     };
 
+    // Attachment [1]: MSAA depth — rendered to, not stored
     const depth_attachment = c.VkAttachmentDescription{
         .flags = 0,
         .format = ctx.depth_format,
-        .samples = c.VK_SAMPLE_COUNT_1_BIT,
+        .samples = ctx.msaa_samples,
         .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
         .finalLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+
+    // Attachment [2]: Resolve / swapchain — receives resolved output, must be stored
+    const resolve_attachment = c.VkAttachmentDescription{
+        .flags = 0,
+        .format = ctx.swapchain_format,
+        .samples = c.VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
     };
 
     const color_ref = c.VkAttachmentReference{
@@ -702,6 +797,11 @@ fn createRenderPass(ctx: *VulkanContext) c.VkResult {
         .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     };
 
+    const resolve_ref = c.VkAttachmentReference{
+        .attachment = 2,
+        .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
     const subpass = c.VkSubpassDescription{
         .flags = 0,
         .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -709,13 +809,13 @@ fn createRenderPass(ctx: *VulkanContext) c.VkResult {
         .pInputAttachments = null,
         .colorAttachmentCount = 1,
         .pColorAttachments = &color_ref,
-        .pResolveAttachments = null,
+        .pResolveAttachments = &resolve_ref,
         .pDepthStencilAttachment = &depth_ref,
         .preserveAttachmentCount = 0,
         .pPreserveAttachments = null,
     };
 
-    // Dependency: ensure depth write completes before next access
+    // Dependency: color output and depth tests must complete before rendering
     const dependency = c.VkSubpassDependency{
         .srcSubpass = c.VK_SUBPASS_EXTERNAL,
         .dstSubpass = 0,
@@ -729,13 +829,17 @@ fn createRenderPass(ctx: *VulkanContext) c.VkResult {
         .dependencyFlags = 0,
     };
 
-    const attachments = [2]c.VkAttachmentDescription{ color_attachment, depth_attachment };
+    const attachments = [3]c.VkAttachmentDescription{
+        msaa_color_attachment,
+        depth_attachment,
+        resolve_attachment,
+    };
 
     const render_pass_info = c.VkRenderPassCreateInfo{
         .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .pNext = null,
         .flags = 0,
-        .attachmentCount = 2,
+        .attachmentCount = 3,
         .pAttachments = &attachments,
         .subpassCount = 1,
         .pSubpasses = &subpass,
@@ -751,14 +855,19 @@ fn createRenderPass(ctx: *VulkanContext) c.VkResult {
 fn createFramebuffers(ctx: *VulkanContext) c.VkResult {
     var i: u32 = 0;
     while (i < ctx.swapchain_image_count) : (i += 1) {
-        const attachments = [2]c.VkImageView{ ctx.swapchain_views[i], ctx.depth_image_view };
+        // 3 attachments: [0] MSAA color, [1] MSAA depth, [2] resolve/swapchain
+        const attachments = [3]c.VkImageView{
+            ctx.msaa_color_view,
+            ctx.depth_image_view,
+            ctx.swapchain_views[i],
+        };
 
         const fb_info = c.VkFramebufferCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .renderPass = ctx.render_pass,
-            .attachmentCount = 2,
+            .attachmentCount = 3,
             .pAttachments = &attachments,
             .width = ctx.swapchain_extent.width,
             .height = ctx.swapchain_extent.height,
@@ -1182,9 +1291,9 @@ fn createGraphicsPipeline(ctx: *VulkanContext) anyerror!void {
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .pNext = null,
         .flags = 0,
-        .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
-        .sampleShadingEnable = c.VK_FALSE,
-        .minSampleShading = 1.0,
+        .rasterizationSamples = ctx.msaa_samples,
+        .sampleShadingEnable = if (ctx.msaa_samples != c.VK_SAMPLE_COUNT_1_BIT) c.VK_TRUE else c.VK_FALSE,
+        .minSampleShading = 0.2, // subtle sub-sample shading improvement (only active when > 1x)
         .pSampleMask = null,
         .alphaToCoverageEnable = c.VK_FALSE,
         .alphaToOneEnable = c.VK_FALSE,
@@ -1370,20 +1479,32 @@ fn createMeshBuffers(
 // ---- swapchain cleanup + recreation ----
 
 fn cleanupSwapchain(ctx: *VulkanContext) void {
-    // destroy depth resources before framebuffers
-    destroyDepthResources(ctx);
-
+    // Destroy in reverse creation order:
+    // 1. Framebuffers
     var i: u32 = 0;
     while (i < ctx.swapchain_image_count) : (i += 1) {
         if (ctx.framebuffers[i] != null) {
             c.vkDestroyFramebuffer(ctx.device, ctx.framebuffers[i], null);
             ctx.framebuffers[i] = null;
         }
+    }
+
+    // 2. MSAA color image + view (VMA free)
+    destroyMsaaColorResources(ctx);
+
+    // 3. Depth image + view (VMA free)
+    destroyDepthResources(ctx);
+
+    // 4. Swapchain image views
+    i = 0;
+    while (i < ctx.swapchain_image_count) : (i += 1) {
         if (ctx.swapchain_views[i] != null) {
             c.vkDestroyImageView(ctx.device, ctx.swapchain_views[i], null);
             ctx.swapchain_views[i] = null;
         }
     }
+
+    // 5. Swapchain
     if (ctx.swapchain != null) {
         c.vkDestroySwapchainKHR(ctx.device, ctx.swapchain, null);
         ctx.swapchain = null;
@@ -1399,13 +1520,33 @@ fn recreateSwapchain(ctx: *VulkanContext) bool {
 
     _ = c.vkDeviceWaitIdle(ctx.device);
 
+    const old_format = ctx.swapchain_format;
     cleanupSwapchain(ctx);
 
+    // 1. Recreate swapchain + image views (updates swapchain_format and swapchain_extent)
     if (createSwapchain(ctx) != c.VK_SUCCESS) return false;
 
-    // Re-create depth resources after swapchain (new extent)
+    // Handle format change: recreate render pass and pipeline if format changed (rare)
+    if (ctx.swapchain_format != old_format) {
+        if (ctx.render_pass != null) {
+            c.vkDestroyRenderPass(ctx.device, ctx.render_pass, null);
+            ctx.render_pass = null;
+        }
+        if (ctx.pipeline != null) {
+            c.vkDestroyPipeline(ctx.device, ctx.pipeline, null);
+            ctx.pipeline = null;
+        }
+        if (createRenderPass(ctx) != c.VK_SUCCESS) return false;
+        createGraphicsPipeline(ctx) catch return false;
+    }
+
+    // 2. Recreate depth resources with MSAA sample count and new extent
     createDepthResources(ctx) catch return false;
 
+    // 3. Recreate MSAA color resources with new extent
+    createMsaaColorResources(ctx) catch return false;
+
+    // 4. Recreate framebuffers with 3 attachments
     if (createFramebuffers(ctx) != c.VK_SUCCESS) return false;
 
     return true;
@@ -1452,22 +1593,30 @@ pub const Renderer = struct {
         };
         ctx.vma_initialized = true;
 
+        // MSAA sample count (after physical device selection, before resource creation)
+        ctx.msaa_samples = getMaxUsableSampleCount(ctx.physical_device);
+
         // swapchain
         if (createSwapchain(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
-        // depth buffer (requires VMA + swapchain extent)
+        // depth buffer with MSAA (requires VMA + swapchain extent + msaa_samples)
         createDepthResources(&ctx) catch {
             return VkBridgeError.VulkanFailed;
         };
 
-        // render pass (requires depth_format from createDepthResources)
+        // MSAA color attachment (requires VMA + swapchain extent + swapchain_format + msaa_samples)
+        createMsaaColorResources(&ctx) catch {
+            return VkBridgeError.VulkanFailed;
+        };
+
+        // render pass with 3 attachments (requires depth_format + swapchain_format + msaa_samples)
         if (createRenderPass(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
-        // framebuffers (requires depth image view + render pass)
+        // framebuffers with 3 attachments (requires MSAA color view + depth view + render pass)
         if (createFramebuffers(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
@@ -1582,10 +1731,12 @@ pub const Renderer = struct {
         };
         _ = c.vkBeginCommandBuffer(ctx.command_buffers[frame], &begin_info);
 
-        // Two clear values: color + depth
-        const clear_values = [2]c.VkClearValue{
+        // Three clear values matching render pass attachments:
+        // [0] MSAA color, [1] MSAA depth, [2] resolve (DONT_CARE load op — value unused)
+        const clear_values = [3]c.VkClearValue{
             ctx.clear_color,
             .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
+            ctx.clear_color, // unused (resolve has DONT_CARE load op)
         };
 
         ctx.graph.execute(

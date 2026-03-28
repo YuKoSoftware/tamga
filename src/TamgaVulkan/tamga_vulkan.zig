@@ -378,6 +378,20 @@ pub const VmaContext = struct {
         usage: c.VkImageUsageFlags,
         gpu_only: bool,
     ) anyerror!ImageAlloc {
+        return self.createImageWithSamples(width, height, format, usage, gpu_only, c.VK_SAMPLE_COUNT_1_BIT);
+    }
+
+    // createImageWithSamples creates a GPU image with a specified MSAA sample count.
+    // Use this for MSAA color and depth attachments.
+    pub fn createImageWithSamples(
+        self: *VmaContext,
+        width: u32,
+        height: u32,
+        format: c.VkFormat,
+        usage: c.VkImageUsageFlags,
+        gpu_only: bool,
+        samples: c.VkSampleCountFlagBits,
+    ) anyerror!ImageAlloc {
         const image_info = c.VkImageCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = null,
@@ -387,7 +401,7 @@ pub const VmaContext = struct {
             .extent = .{ .width = width, .height = height, .depth = 1 },
             .mipLevels = 1,
             .arrayLayers = 1,
-            .samples = c.VK_SAMPLE_COUNT_1_BIT,
+            .samples = samples,
             .tiling = if (gpu_only) c.VK_IMAGE_TILING_OPTIMAL else c.VK_IMAGE_TILING_LINEAR,
             .usage = usage,
             .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
