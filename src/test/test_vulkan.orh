@@ -108,21 +108,13 @@ pub func run_vulkan_test() void {
     var running: bool = true
 
     while(running) {
-        const ev = tamga_sdl3.pollEvent()
-        if(ev != null) {
-
-            if(ev is tamga_sdl3.QuitEvent) {
+        // pollEventTag: 0=none, 1=quit, 2=window_close, 3=key_down, 99=other
+        const tag = tamga_sdl3.pollEventTag()
+        if(tag == 1) { running = false }
+        if(tag == 2) { running = false }
+        if(tag == 3) {
+            if(tamga_sdl3.getLastScancode() == 41) { // 41 = SDL_SCANCODE_ESCAPE
                 running = false
-            }
-            if(ev is tamga_sdl3.WindowCloseEvent) {
-                running = false
-            }
-
-            if(ev is tamga_sdl3.KeyDownEvent) {
-                const kd = ev.value
-                if(kd.scancode == tamga_sdl3.Scancode.Escape) {
-                    running = false
-                }
             }
         }
 

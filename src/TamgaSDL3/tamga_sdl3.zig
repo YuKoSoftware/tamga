@@ -392,3 +392,23 @@ pub fn getTicksNS() u64 {
 pub fn delayNS(ns: u64) void {
     c.SDL_DelayNS(ns);
 }
+
+// ---- event query helpers ----
+// Workaround for cross-module `is` codegen bug.
+
+var last_event: RawEvent = RawEvent.create();
+
+pub fn pollEventTag() i32 {
+    last_event = RawEvent.create();
+    if (!last_event.poll()) return 0;
+    return switch (last_event.tag) {
+        TAG_QUIT => 1,
+        TAG_WINDOW_CLOSE => 2,
+        TAG_KEY_DOWN => 3,
+        else => 99,
+    };
+}
+
+pub fn getLastScancode() u32 {
+    return last_event.key_scancode;
+}

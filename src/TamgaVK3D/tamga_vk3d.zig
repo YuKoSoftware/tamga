@@ -56,9 +56,8 @@ const RenderGraph = struct {
         };
 
         c.vkCmdBeginRenderPass(command_buffer, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
-        // geometry pass: draw calls are recorded between beginFrame and endFrame
-        // future: execute registered pass callbacks here
-        c.vkCmdEndRenderPass(command_buffer);
+        // render pass is now open — draw calls are recorded between beginFrame and endFrame
+        // endFrame calls vkCmdEndRenderPass before submitting
     }
 };
 
@@ -2284,6 +2283,9 @@ pub const Renderer = struct {
         const frame = ctx.current_frame;
         const image_index = ctx.graph.current_image_index;
 
+        // end the render pass opened by beginFrame → graph.execute
+        c.vkCmdEndRenderPass(ctx.command_buffers[frame]);
+
         ctx.active_cmd = null;
 
         _ = c.vkEndCommandBuffer(ctx.command_buffers[frame]);
@@ -2432,9 +2434,9 @@ pub const Renderer = struct {
         diffuse_a: f32,
         specular: f32,
         shininess: f32,
-        texture: Texture,
+        texture: *const Texture,
     ) anyerror!Material {
-        return materialCreate(&self.ctx, diffuse_r, diffuse_g, diffuse_b, diffuse_a, specular, shininess, &texture);
+        return materialCreate(&self.ctx, diffuse_r, diffuse_g, diffuse_b, diffuse_a, specular, shininess, texture);
     }
 
     // destroyMaterial: bridge func — releases material GPU resources.

@@ -61,6 +61,7 @@ const VmaVulkanFunctions = extern struct {
     vkGetPhysicalDeviceMemoryProperties2KHR: ?*const anyopaque = null,
     vkGetDeviceBufferMemoryRequirements: ?*const anyopaque = null,
     vkGetDeviceImageMemoryRequirements: ?*const anyopaque = null,
+    vkGetMemoryWin32HandleKHR: ?*const anyopaque = null,
 };
 
 const VmaAllocatorCreateInfo = extern struct {
@@ -86,6 +87,7 @@ const VmaAllocationCreateInfo = extern struct {
     pool: ?VmaPool = null,
     pUserData: ?*anyopaque = null,
     priority: f32 = 0.0,
+    minAlignment: c.VkDeviceSize = 0,
 };
 
 const VmaAllocationInfo = extern struct {
