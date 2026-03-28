@@ -186,3 +186,17 @@ When a module declares `#cimport = { name: "vulkan", include: "vulkan/vulkan.h",
 **Impact:** The C++ source may fail to find system headers (e.g., `vulkan/vulkan.h`) on systems where `linkLibCpp()` alone doesn't provide the include path. Currently works on Solus because C++ includes transitively expose Vulkan headers.
 
 **Fix needed:** When `#cimport` has a `source:` field, the generated `build.zig` should also add `linkSystemLibrary(name)` and `linkLibC()` for that module — same as it does for modules that declare `#cimport` without `source:`.
+
+### Cross-module `is` operator generates `@TypeOf` comparison instead of tagged union check
+
+`if(ev is tamga_sdl3.QuitEvent)` generates `if (@TypeOf(ev) == tamga_sdl3.QuitEvent)` in Zig. `@TypeOf` returns the compile-time type of the variable (always the union type), not the runtime active tag. The check is always false.
+
+Intra-module `is` works correctly — `ev == ._QuitEvent` is generated.
+
+**Found in:** Phase 2 plan 02-04 (test_vulkan.orh event handling)
+
+**Impact:** Cannot use `is` to dispatch on union variants from another module. All cross-module `is` checks on tagged unions silently fail (always false).
+
+**Workaround:** Added `pollEventTag()`/`getLastScancode()` bridge helpers in tamga_sdl3 that classify events internally (intra-module `is` works), returning integer tags to the caller.
+
+**Fix needed:** In codegen for `is` with a cross-module type, emit tagged union comparison (`ev == ._TypeName`) instead of `@TypeOf(ev) == TypeName`.
