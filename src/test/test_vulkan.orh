@@ -63,7 +63,7 @@ pub func run_vulkan_test() void {
     ren.setClearColor(0.1, 0.1, 0.15, 1.0)
 
     // Load a 2x2 checkerboard test texture (PNG, red/green/blue/white)
-    const texResult = ren.loadTexture("src/test/assets/test_texture.png")
+    const texResult = ren.loadTexture("assets/test_texture.png")
     if(texResult is Error) {
         console.println("Texture load failed")
         return
