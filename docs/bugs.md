@@ -75,29 +75,11 @@ Workaround removed in Phase 1 cleanup (260326-h4x) — WindowHandle wrapper stru
 
 **Status:** FIXED — confirmed in Phase 2 plan 02-04. The compiler now correctly generates `?union(enum) { _QuitEvent: QuitEvent, _KeyDownEvent: KeyDownEvent, ... }` for `(null | QuitEvent | KeyDownEvent | ...)`. The `NoEvent` workaround has been removed; `pollEvent()` uses `null` directly.
 
-### `cast(EnumType, int)` generates @intCast instead of @enumFromInt
+### ~~`cast(EnumType, int)` generates @intCast instead of @enumFromInt~~ FIXED
+**Fixed in:** v0.14 Phase 20 — codegen now emits `@enumFromInt` for enum casts.
 
-`cast(Scancode, raw.getKeyScancode())` generates `@as(Scancode, @intCast(raw.getKeyScancode()))` in Zig. Zig rejects this: `@intCast` cannot convert integers to enum types; `@enumFromInt` must be used instead.
-
-**Found in:** Phase 1 cleanup 260326-h4x, tamga_sdl3.orh pollEvent()
-
-**Impact:** Cannot cast raw integer values to typed enum fields in event structs.
-
-**Workaround:** KeyDownEvent.scancode and MouseButtonEvent.button fields remain `u32`/`u8` (raw integer types). Callers compare against raw integer literals.
-
-**Fix needed:** In codegen `cast(T, x)`, detect when T is an enum type and emit `@as(T, @enumFromInt(x))` instead of `@as(T, @intCast(x))`.
-
-### Empty struct construction `TypeName()` generates invalid Zig `TypeName()`
-
-`return NoEvent()` (a struct with no fields) generates `NoEvent()` in Zig. Zig rejects this: `NoEvent` is a type, not a function. Empty struct literals in Zig are `NoEvent{}`, not `NoEvent()`.
-
-**Found in:** Phase 1 cleanup 260326-h4x, tamga_sdl3.orh pollEvent()
-
-**Impact:** Cannot construct zero-field struct values in arbitrary union return.
-
-**Workaround:** Added a dummy `pub empty: bool` field to NoEvent so construction uses named args: `NoEvent(empty: false)` → Zig: `NoEvent{ .empty = false }`.
-
-**Fix needed:** In codegen, when a call_expr with no args targets a struct type (no bitfield, no function), emit `TypeName{}` (struct initialization) instead of `TypeName()` (function call).
+### ~~Empty struct construction `TypeName()` generates invalid Zig~~ FIXED
+**Fixed in:** v0.14 Phase 20 — codegen now emits `TypeName{}` for zero-field structs.
 
 ### Multi-file module with Zig sidecar: "file exists in modules 'root' and 'tamga_sdl3'"
 
@@ -111,29 +93,11 @@ Workaround removed in Phase 1 cleanup (260326-h4x) — WindowHandle wrapper stru
 
 **Fix needed:** In the build system codegen, when a module has a sidecar .zig file (same name as the anchor .orh file), only add it as the module's bridge file — do NOT add it to the root build graph as a standalone file.
 
-### `size` is a reserved keyword / parse error in bridge func parameters
+### ~~`size` is a reserved keyword in bridge func parameters~~ FIXED
+**Fixed in:** PEG grammar — `param_name` rule allows `size` and other builtin keywords in parameter position.
 
-`bridge func createBuffer(self: &Allocator, size: u64, ...)` fails with `unexpected 'size'`. The word `size` cannot be used as a parameter name in bridge functions.
-
-**Found in:** Phase 2 plan 02-01 (TamgaVMA tamga_vma.orh)
-
-**Impact:** Cannot use `size` as a parameter name in bridge function signatures.
-
-**Workaround:** Renamed parameter to `byte_size` / `byte_count`.
-
-**Fix needed:** Determine if `size` is an intentional reserved keyword or an unintended parse conflict; if unintentional, allow it as an identifier in parameter position.
-
-### `const &BridgeStruct` parameter codegen passes by value instead of by pointer
-
-`bridge func draw(self: &Renderer, mesh: const &Mesh, ...)` — the `const &Mesh` parameter should pass a pointer to the argument, but the generated Zig emits a by-value pass. Zig expects `*const Mesh` but gets `Mesh`.
-
-**Found in:** Phase 2 plan 02-03 (tamga_vk3d.orh draw/destroyMesh)
-
-**Impact:** Cannot pass bridge struct values as `const &` to bridge functions. `self: &T` (mutable) works correctly as the receiver.
-
-**Workaround:** Changed `const &Mesh` parameters to pass `Mesh` by value (small struct, acceptable API).
-
-**Fix needed:** In codegen, when a bridge function parameter is `const &BridgeStruct`, emit `@ptrCast(&arg)` (take address) at the call site, not just `arg`.
+### ~~`const &BridgeStruct` parameter codegen passes by value instead of by pointer~~ FIXED
+**Fixed in:** v0.16 Phase 25 — `is_bridge` flag on FuncSig guards const auto-borrow. `const &` bridge params now correctly emit `&arg` at call site.
 
 ### Bridge struct value param generates `*const` in error-union-returning functions
 
@@ -149,29 +113,11 @@ Non-error-union bridge functions correctly pass structs by value.
 
 **Fix needed:** In codegen for error-union-returning bridge functions, keep struct value parameters as values (consistent with non-error-union functions), or at minimum make the call site match the generated signature.
 
-### `export fn` in sidecar .zig should be `pub export fn`
+### ~~`export fn` in sidecar .zig should be `pub export fn`~~ FIXED
+**Fixed in:** v0.16 Phase 25 — sidecar copy now does read-modify-write to prepend `pub` to all `export fn` declarations.
 
-Bridge functions declared in `main.orh` as `bridge func foo()` generate `export fn foo()` in the sidecar copy. The generated `main.zig` does `@import("main_bridge").foo` which requires `pub` visibility.
-
-**Found in:** Phase 2 plan 02-03 (main.zig bridge helper functions)
-
-**Impact:** Bridge functions in the main module's sidecar are not accessible from the generated Orhon code.
-
-**Workaround:** Manually add `pub` to all `export fn` declarations in `main.zig`.
-
-**Fix needed:** When copying sidecar .zig files to bridge files, ensure all `export fn` declarations also have `pub` visibility, or the codegen should emit `pub export fn` for bridge function implementations.
-
-### Negative float literals rejected as bridge call arguments
-
-`ren.setDirLight(0, -0.5, -1.0, -0.3, ...)` fails with `unexpected '-'`. Negative numeric literals are not valid as direct arguments in bridge function calls.
-
-**Found in:** Phase 2 plan 02-04 (test_vulkan.orh setDirLight)
-
-**Impact:** Cannot pass negative float or integer literals directly as function arguments. Non-bridge calls may have the same limitation.
-
-**Workaround:** Assign to a `const` variable first: `const x: f32 = 0.0 - 0.5`, then pass `x`.
-
-**Fix needed:** Parser should allow unary negation expressions (`-0.5`) in argument position.
+### ~~Negative float literals rejected as bridge call arguments~~ FIXED
+**Fixed in:** v0.16 Phase 26 — unary `-` added to PEG grammar's `unary_expr` rule. Negative literals now valid as function arguments.
 
 ### `#cimport` bridge file cannot resolve module-relative include paths
 
@@ -195,19 +141,8 @@ When a module declares `#cimport = { name: "vulkan", include: "vulkan/vulkan.h",
 
 **Fix needed:** When `#cimport` has a `source:` field, the generated `build.zig` should also add `linkSystemLibrary(name)` and `linkLibC()` for that module — same as it does for modules that declare `#cimport` without `source:`.
 
-### Cross-module `is` operator generates `@TypeOf` comparison instead of tagged union check
-
-`if(ev is tamga_sdl3.QuitEvent)` generates `if (@TypeOf(ev) == tamga_sdl3.QuitEvent)` in Zig. `@TypeOf` returns the compile-time type of the variable (always the union type), not the runtime active tag. The check is always false.
-
-Intra-module `is` works correctly — `ev == ._QuitEvent` is generated.
-
-**Found in:** Phase 2 plan 02-04 (test_vulkan.orh event handling)
-
-**Impact:** Cannot use `is` to dispatch on union variants from another module. All cross-module `is` checks on tagged unions silently fail (always false).
-
-**Workaround:** Added `pollEventTag()`/`getLastScancode()` bridge helpers in tamga_sdl3 that classify events internally (intra-module `is` works), returning integer tags to the caller.
-
-**Fix needed:** In codegen for `is` with a cross-module type, emit tagged union comparison (`ev == ._TypeName`) instead of `@TypeOf(ev) == TypeName`.
+### ~~Cross-module `is` operator generates `@TypeOf` comparison instead of tagged union check~~ FIXED
+**Fixed in:** v0.16 Phase 26 — both AST and MIR codegen paths now check `arbitrary_union` type class and emit `val == ._TypeName` for cross-module tagged union checks. Workaround bridge helpers (pollEventTag, getLastScancode) are now obsolete.
 
 ### Cross-compilation `-win_x64` passes garbled step name to Zig build
 
