@@ -1,7 +1,7 @@
 module tamga_vk3d
 
 #name    = "tamga_vk3d"
-#version = Version(0, 1, 3)
+#version = Version(0, 1, 4)
 #build   = static
 #cimport = { name: "vulkan", include: "vulkan/vulkan.h" }
 
