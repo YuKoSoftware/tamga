@@ -69,47 +69,48 @@ Workaround removed in Phase 1 cleanup (260326-h4x) — WindowHandle wrapper stru
 
 ## Open
 
-### ~~`(null | A | B | C)` union with null collapses to `?A`~~ FIXED
+None — all known bugs are fixed.
 
-~~`typeToZig` for `(null | A | B | C)` returns `?A` — only the first non-null type survives.~~
+## Fixed (v0.16)
 
-**Status:** FIXED — confirmed in Phase 2 plan 02-04. The compiler now correctly generates `?union(enum) { _QuitEvent: QuitEvent, _KeyDownEvent: KeyDownEvent, ... }` for `(null | QuitEvent | KeyDownEvent | ...)`. The `NoEvent` workaround has been removed; `pollEvent()` uses `null` directly.
+### `(null | A | B | C)` union with null
+**Fixed in:** v0.14 Phase 20 — generates `?union(enum) { ... }` for multi-type null unions.
 
-### ~~`cast(EnumType, int)` generates @intCast instead of @enumFromInt~~ FIXED
-**Fixed in:** v0.14 Phase 20 — codegen now emits `@enumFromInt` for enum casts.
+### `cast(EnumType, int)` generates @enumFromInt
+**Fixed in:** v0.14 Phase 20
 
-### ~~Empty struct construction `TypeName()` generates invalid Zig~~ FIXED
-**Fixed in:** v0.14 Phase 20 — codegen now emits `TypeName{}` for zero-field structs.
+### Empty struct construction `TypeName{}`
+**Fixed in:** v0.14 Phase 20
 
-### ~~Multi-file module with Zig sidecar: "file exists in two modules"~~ FIXED
-**Fixed in:** v0.16 Phase 27 — infinite loop in sidecar pub-fixup fixed; sidecar deduplication prevents duplicate module registration.
+### Multi-file module with Zig sidecar
+**Fixed in:** v0.16 Phase 27 — sidecar pub-fixup loop fixed; deduplication prevents duplicate module registration.
 
-### ~~`size` is a reserved keyword in bridge func parameters~~ FIXED
-**Fixed in:** PEG grammar — `param_name` rule allows `size` and other builtin keywords in parameter position.
+### `size` keyword in bridge func parameters
+**Fixed in:** PEG grammar — `param_name` rule allows builtin keywords in parameter position.
 
-### ~~`const &BridgeStruct` parameter codegen passes by value instead of by pointer~~ FIXED
-**Fixed in:** v0.16 Phase 25 — `is_bridge` flag on FuncSig guards const auto-borrow. `const &` bridge params now correctly emit `&arg` at call site.
+### `const &BridgeStruct` pointer pass
+**Fixed in:** v0.16 Phase 25 — `is_bridge` flag on FuncSig guards const auto-borrow.
 
-### ~~Bridge struct value param generates `*const` in error-union-returning functions~~ FIXED
-**Fixed in:** v0.16 Phase 25 — `is_bridge` guard on FuncSig prevents const auto-borrow for all bridge calls including error-union-returning functions. The workaround (`const &Texture` + `*const Texture`) is now obsolete — by-value params work correctly. Regression tests added to mir.zig.
+### Bridge struct value param `*const` in error-union functions
+**Fixed in:** v0.16 Phase 25 — `is_bridge` guard covers all bridge calls. Tamga workaround obsolete.
 
-### ~~`export fn` in sidecar .zig should be `pub export fn`~~ FIXED
-**Fixed in:** v0.16 Phase 25 — sidecar copy now does read-modify-write to prepend `pub` to all `export fn` declarations.
+### Sidecar `export fn` → `pub export fn`
+**Fixed in:** v0.16 Phase 25 — read-modify-write prepends `pub` to all `export fn`.
 
-### ~~Negative float literals rejected as bridge call arguments~~ FIXED
-**Fixed in:** v0.16 Phase 26 — unary `-` added to PEG grammar's `unary_expr` rule. Negative literals now valid as function arguments.
+### Negative float literals in arguments
+**Fixed in:** v0.16 Phase 26 — unary `-` added to PEG grammar.
 
-### ~~`#cimport` bridge file cannot resolve module-relative include paths~~ FIXED
-**Fixed in:** v0.16 Phase 27 — `addIncludePath` emitted for source module directory so sidecar `@cInclude` resolves module-relative headers.
+### `#cimport` module-relative include paths
+**Fixed in:** v0.16 Phase 27 — `addIncludePath` for source module directory.
 
-### ~~`#cimport source:` does not generate `linkSystemLibrary` for owning module~~ FIXED
-**Fixed in:** v0.16 Phase 27 — `linkSystemLibrary` now emitted unconditionally for all `#cimport` names regardless of `source:` field.
+### `#cimport source:` linkSystemLibrary
+**Fixed in:** v0.16 Phase 27 — unconditional for all `#cimport` names.
 
-### ~~Cross-module `is` operator generates `@TypeOf` comparison instead of tagged union check~~ FIXED
-**Fixed in:** v0.16 Phase 26 — both AST and MIR codegen paths now check `arbitrary_union` type class and emit `val == ._TypeName` for cross-module tagged union checks. Workaround bridge helpers (pollEventTag, getLastScancode) are now obsolete.
+### Cross-module `is` operator tagged union check
+**Fixed in:** v0.16 Phase 26 — emits `val == ._TypeName` for arbitrary unions.
 
-### ~~Cross-compilation `-win_x64` passes garbled step name~~ FIXED
-**Fixed in:** v0.16 Phase 28 — use-after-free in `target_flag` allocation fixed; `defer` moved outside `if` block so string lives until `runZigIn` reads it.
+### Cross-compilation garbled step name
+**Fixed in:** v0.16 Phase 28 — use-after-free in `target_flag` allocation fixed.
 
-### ~~`orhon build -fast` leaks cache directory into `bin/`~~ FIXED
-**Fixed in:** v0.16 Phase 28 — cache cleanup now removes `zig-out`, `.zig-cache`, and `zig-cache` from both generated and project root directories.
+### `-fast` cache leak into `bin/`
+**Fixed in:** v0.16 Phase 28 — cache cleanup runs unconditionally.
