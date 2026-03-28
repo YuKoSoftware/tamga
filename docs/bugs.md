@@ -208,3 +208,15 @@ Intra-module `is` works correctly — `ev == ._QuitEvent` is generated.
 **Workaround:** Added `pollEventTag()`/`getLastScancode()` bridge helpers in tamga_sdl3 that classify events internally (intra-module `is` works), returning integer tags to the caller.
 
 **Fix needed:** In codegen for `is` with a cross-module type, emit tagged union comparison (`ev == ._TypeName`) instead of `@TypeOf(ev) == TypeName`.
+
+### Cross-compilation `-win_x64` passes garbled step name to Zig build
+
+`orhon build -win_x64` fails with `no step named '�����������������������'`. The compiler passes a corrupted/uninitialized string as the Zig build step name for the Windows x64 target.
+
+**Found in:** Phase 2 (tamga_framework cross-compile attempt)
+
+**Impact:** Cannot cross-compile for Windows. Likely affects all cross-compile targets (`-linux_x64` from non-Linux may also be broken).
+
+**Workaround:** None — build natively on Windows, or fix the compiler.
+
+**Fix needed:** In the build.zig codegen for cross-compilation targets, the step name string is uninitialized or points to freed memory. Initialize it properly before passing to `b.step()`.
