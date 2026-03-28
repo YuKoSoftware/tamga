@@ -69,17 +69,11 @@ Workaround removed in Phase 1 cleanup (260326-h4x) — WindowHandle wrapper stru
 
 ## Open
 
-### `(null | A | B | C)` union with null collapses to `?A`
+### ~~`(null | A | B | C)` union with null collapses to `?A`~~ FIXED
 
-`typeToZig` for `(null | A | B | C)` returns `?A` — only the first non-null type survives. The codegen emits `?A` as the function return type and generates `return .{ ._null = null }` which fails Zig compilation.
+~~`typeToZig` for `(null | A | B | C)` returns `?A` — only the first non-null type survives.~~
 
-**Found in:** Phase 1 cleanup 260326-h4x, tamga_sdl3.orh pollEvent()
-
-**Impact:** Cannot use null in a union with 3+ types. `(null | A)` (two members) works fine, but adding more types causes codegen to drop all but the first.
-
-**Workaround:** Added `NoEvent` struct as a sentinel first union member. pollEvent returns `(NoEvent | QuitEvent | KeyDownEvent | ...)` — a union without null. Callers use `if(ev is not tamga_sdl3.NoEvent)` instead of null check.
-
-**Fix needed:** When a union contains `null` AND more than one non-null type, codegen should generate `?(union(enum) { ... })` rather than `?FirstType`.
+**Status:** FIXED — confirmed in Phase 2 plan 02-04. The compiler now correctly generates `?union(enum) { _QuitEvent: QuitEvent, _KeyDownEvent: KeyDownEvent, ... }` for `(null | QuitEvent | KeyDownEvent | ...)`. The `NoEvent` workaround has been removed; `pollEvent()` uses `null` directly.
 
 ### `cast(EnumType, int)` generates @intCast instead of @enumFromInt
 
@@ -140,6 +134,20 @@ Workaround removed in Phase 1 cleanup (260326-h4x) — WindowHandle wrapper stru
 **Workaround:** Changed `const &Mesh` parameters to pass `Mesh` by value (small struct, acceptable API).
 
 **Fix needed:** In codegen, when a bridge function parameter is `const &BridgeStruct`, emit `@ptrCast(&arg)` (take address) at the call site, not just `arg`.
+
+### Bridge struct value param generates `*const` in error-union-returning functions
+
+`bridge func createMaterial(self: &Renderer, ..., texture: Texture) (Error | Material)` — the `texture: Texture` (by value) parameter generates `texture: *const Texture` on the Zig side when the function returns an error union. The generated call site still passes by value, causing a type mismatch.
+
+Non-error-union bridge functions correctly pass structs by value.
+
+**Found in:** Phase 2 plan 02-04 (tamga_vk3d.orh createMaterial)
+
+**Impact:** Bridge functions returning error unions silently convert struct value params to const pointer. The Zig sidecar must use `*const T` to match, and the bridge declaration must use `const &T`.
+
+**Workaround:** Changed bridge declaration to `texture: const &Texture` and Zig sidecar to `texture: *const Texture` to match what the compiler generates.
+
+**Fix needed:** In codegen for error-union-returning bridge functions, keep struct value parameters as values (consistent with non-error-union functions), or at minimum make the call site match the generated signature.
 
 ### `export fn` in sidecar .zig should be `pub export fn`
 
