@@ -90,19 +90,8 @@ Workaround removed in Phase 1 cleanup (260326-h4x) — WindowHandle wrapper stru
 ### ~~`const &BridgeStruct` parameter codegen passes by value instead of by pointer~~ FIXED
 **Fixed in:** v0.16 Phase 25 — `is_bridge` flag on FuncSig guards const auto-borrow. `const &` bridge params now correctly emit `&arg` at call site.
 
-### Bridge struct value param generates `*const` in error-union-returning functions
-
-`bridge func createMaterial(self: &Renderer, ..., texture: Texture) (Error | Material)` — the `texture: Texture` (by value) parameter generates `texture: *const Texture` on the Zig side when the function returns an error union. The generated call site still passes by value, causing a type mismatch.
-
-Non-error-union bridge functions correctly pass structs by value.
-
-**Found in:** Phase 2 plan 02-04 (tamga_vk3d.orh createMaterial)
-
-**Impact:** Bridge functions returning error unions silently convert struct value params to const pointer. The Zig sidecar must use `*const T` to match, and the bridge declaration must use `const &T`.
-
-**Workaround:** Changed bridge declaration to `texture: const &Texture` and Zig sidecar to `texture: *const Texture` to match what the compiler generates.
-
-**Fix needed:** In codegen for error-union-returning bridge functions, keep struct value parameters as values (consistent with non-error-union functions), or at minimum make the call site match the generated signature.
+### ~~Bridge struct value param generates `*const` in error-union-returning functions~~ FIXED
+**Fixed in:** v0.16 Phase 25 — `is_bridge` guard on FuncSig prevents const auto-borrow for all bridge calls including error-union-returning functions. The workaround (`const &Texture` + `*const Texture`) is now obsolete — by-value params work correctly. Regression tests added to mir.zig.
 
 ### ~~`export fn` in sidecar .zig should be `pub export fn`~~ FIXED
 **Fixed in:** v0.16 Phase 25 — sidecar copy now does read-modify-write to prepend `pub` to all `export fn` declarations.
