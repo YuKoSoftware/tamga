@@ -4,6 +4,7 @@ module tamga_vk3d
 #version = Version(0, 1, 4)
 #build   = static
 #cimport = { name: "vulkan", include: "vulkan/vulkan.h" }
+#cimport = { name: "stb_image", include: "stb_image.h", source: "../../src/TamgaVK3D/stb_image_impl.c" }
 
 import tamga_sdl3
 import tamga_vulkan
@@ -20,6 +21,23 @@ pub bridge struct Mesh {
     // (No standalone constructor — use Renderer.createMesh and Renderer.destroyMesh)
     // Mesh is a bridge struct so its identity (pointer to MeshBuffers) can be passed
     // to Renderer.draw as const &Mesh.
+}
+
+// ---- Texture ----
+// GPU image + view + sampler loaded from a PNG/JPG file via stb_image.
+// Created via Renderer.loadTexture, destroyed via Renderer.destroyTexture.
+
+pub bridge struct Texture {
+    // (No standalone constructor — use Renderer.loadTexture and Renderer.destroyTexture)
+}
+
+// ---- Material ----
+// Phong material: diffuse color, specular intensity, shininess, and a texture.
+// Created via Renderer.createMaterial, destroyed via Renderer.destroyMaterial.
+// Bound to descriptor set 1 during draw calls.
+
+pub bridge struct Material {
+    // (No standalone constructor — use Renderer.createMaterial and Renderer.destroyMaterial)
 }
 
 // ---- Renderer ----
@@ -50,8 +68,44 @@ pub bridge struct Renderer {
     // view_pos: pointer to 3-float camera world position
     bridge func setCamera(self: &Renderer, view: Ptr(u8), proj: Ptr(u8), view_pos: Ptr(u8)) void
 
-    // draw submits a mesh for rendering with the given model matrix.
+    // draw submits a mesh for rendering with the given material and model matrix.
     // mesh: the mesh to draw
+    // material: const read borrow — descriptor set 1 bound before the draw call
     // model_matrix: pointer to column-major 4x4 float model matrix (16 floats, push constant)
-    bridge func draw(self: &Renderer, mesh: const &Mesh, model_matrix: Ptr(u8)) void
+    bridge func draw(self: &Renderer, mesh: const &Mesh, material: const &Material, model_matrix: Ptr(u8)) void
+
+    // loadTexture loads a PNG/JPG texture from disk and returns a Texture object.
+    // path: null-terminated path to the image file (relative to working directory).
+    bridge func loadTexture(self: &Renderer, path: String) (Error | Texture)
+
+    // destroyTexture releases a previously loaded texture.
+    bridge func destroyTexture(self: &Renderer, tex: const &Texture) void
+
+    // createMaterial creates a Phong material with the given properties and texture.
+    // diffuse_r/g/b/a: RGBA diffuse color multiplier (1.0 = unmodified texture color)
+    // specular: specular intensity (0.0 = none, 1.0 = full)
+    // shininess: Phong shininess exponent (e.g. 32.0 = moderately shiny)
+    // texture: passed by value (Orhon compiler does not auto-borrow bridge structs in error-union-returning calls — compiler bug)
+    bridge func createMaterial(self: &Renderer, diffuse_r: f32, diffuse_g: f32, diffuse_b: f32, diffuse_a: f32, specular: f32, shininess: f32, texture: Texture) (Error | Material)
+
+    // destroyMaterial releases a previously created material.
+    bridge func destroyMaterial(self: &Renderer, mat: const &Material) void
+
+    // setDirLight configures a directional light at the given index (0..3).
+    // dir_x/y/z: direction vector the light travels (should be normalized)
+    // r/g/b: light color (1.0, 1.0, 1.0 = white)
+    // Call setLightCounts after setting lights to activate them.
+    bridge func setDirLight(self: &Renderer, index: u32, dir_x: f32, dir_y: f32, dir_z: f32, r: f32, g: f32, b: f32) void
+
+    // setPointLight configures a point light at the given index (0..7).
+    // pos_x/y/z: world-space position of the light
+    // r/g/b: light color
+    // constant/linear/quadratic: attenuation factors (e.g. 1.0, 0.09, 0.032 for ~50 unit range)
+    // Call setLightCounts after setting lights to activate them.
+    bridge func setPointLight(self: &Renderer, index: u32, pos_x: f32, pos_y: f32, pos_z: f32, r: f32, g: f32, b: f32, constant: f32, linear: f32, quadratic: f32) void
+
+    // setLightCounts activates the given number of directional and point lights.
+    // Must be called after configuring lights via setDirLight/setPointLight.
+    // Writes the pending light data to the per-frame UBO.
+    bridge func setLightCounts(self: &Renderer, num_dir: u32, num_point: u32) void
 }
