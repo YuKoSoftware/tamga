@@ -44,8 +44,6 @@ pub bridge struct Material {
 // Vulkan renderer: manages swapchain, render pass, depth buffer, pipeline, and per-frame resources.
 
 pub bridge struct Renderer {
-    // NOTE: Bridge signature uses tamga_sdl3.WindowHandle (D-08, WIN-13).
-    // If the compiler rejects cross-module types in bridge position, see docs/bugs.md.
     bridge func create(window_handle: tamga_sdl3.WindowHandle, debug_mode: bool) (Error | Renderer)
     bridge func destroy(self: &Renderer) void
     bridge func beginFrame(self: &Renderer) bool

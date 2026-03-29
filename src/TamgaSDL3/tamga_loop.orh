@@ -10,9 +10,6 @@ import std::console
 // on_update:  Called at fixed_hz rate — receives delta time in seconds (f64)
 // on_render:  Called once per frame — receives interpolation alpha in [0,1) (f64)
 //
-// NOTE: Function pointer field syntax — using func(T) RetT per Orhon spec.
-// If compiler rejects this form, see docs/bugs.txt for alternative.
-
 pub struct LoopConfig {
     pub fixed_hz:  f64
     pub on_event:  func(Event) void

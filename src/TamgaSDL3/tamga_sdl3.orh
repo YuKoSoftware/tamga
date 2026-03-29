@@ -300,13 +300,12 @@ pub func pollEvent() (null | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotion
 }
 
 // ---- Event query helpers ----
-// Workaround for cross-module `is` codegen bug: `is` generates @TypeOf comparison
-// instead of tagged union comparison when the type is from another module.
-// Bridge functions in the Zig sidecar poll SDL events and return classification data.
+// Low-level alternative to pollEvent() — returns integer tags instead of typed unions.
+// Useful when callers only need a few event types without full union dispatch.
 
 // pollEventTag: polls one SDL event and returns a classification tag:
 //   0 = no event, 1 = quit, 2 = window_close, 3 = key_down, 99 = other
-// Also caches the event internally for subsequent getLastScancode() calls.
+// Caches the event internally for subsequent getLastScancode() calls.
 pub bridge func pollEventTag() i32
 
 // getLastScancode: returns the scancode from the last polled key event.

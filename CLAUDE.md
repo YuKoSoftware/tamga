@@ -42,9 +42,10 @@ src/
 
 **Imports:**
 ```
-import math             # project-local module
-import std::alpha       # stdlib module
-import std::alpha as io # with alias
+import math             # project-local module (namespaced: math.func())
+use math                # scope-merged import (func() directly)
+import std::console     # stdlib module
+import std::console as io  # with alias
 ```
 
 No circular imports ever. Everything is private by default; `pub` exposes symbols outside the module.
@@ -70,10 +71,14 @@ src/
 // sdl.orh
 module sdl
 
-bridge func windowCreate(title: String, w: i32, h: i32) Ptr(u8)
-bridge struct Renderer {
-    bridge func create(win: Ptr(u8)) Renderer
-    bridge func draw(self: &Renderer) void
+#cimport = { name: "SDL3", include: "SDL3/SDL.h" }
+
+pub const WindowHandle: type = Ptr(u8)
+
+pub bridge struct Window {
+    bridge func create(title: String, w: i32, h: i32, flags: u64) (Error | Window)
+    bridge func destroy(self: &Window) void
+    bridge func getHandle(self: const &Window) WindowHandle
 }
 ```
 
@@ -91,7 +96,7 @@ This project serves two equally important goals:
 1. **Real framework** — a genuinely usable, production-quality game/multimedia library for Orhon
 2. **Language stress test** — Orhon is young and actively developed; this framework is a primary vehicle for discovering compiler bugs, missing features, and language rough edges
 
-When something doesn't compile or behaves unexpectedly, it may be a compiler bug rather than a code mistake. Log it in `docs/bugs.txt`. When a pattern feels awkward or requires a workaround, log it in `docs/ideas.txt` as potential language feedback.
+When something doesn't compile or behaves unexpectedly, it may be a compiler bug rather than a code mistake. Log it in `docs/bugs.md`. When a pattern feels awkward or requires a workaround, log it in `docs/ideas.md` as potential language feedback.
 
 **Never work around compiler bugs by writing bad code** — if a valid language construct is broken, note it and find a clean alternative, or leave a comment marking the workaround as temporary.
 
@@ -104,15 +109,13 @@ When something doesn't compile or behaves unexpectedly, it may be a compiler bug
 
 ## Planned Components
 
-- Window/input (SDL3 bridge)
-- Vulkan and OpenGL rendering
+- Window/input (SDL3 bridge) — **done** (tamga_sdl3)
+- Vulkan 3D renderer — **done** (tamga_vk3d: textures, materials, Phong lighting)
+- VMA GPU memory allocator — **done** (tamga_vulkan)
+- Game loop — **done** (tamga_sdl3: fixed-timestep with variable render)
 - Standalone 2D renderer (Vulkan, performance-optimized)
-- Standalone 3D renderer (Vulkan, performance-optimized)
-- WAV player (sound effects) and OGG player (music)
-- Physics engine (lightweight)
-- ECS library with attachable Orhon scripts (Godot-style)
-- Game loop
-- 3D model loader
+- Audio (WAV + OGG via SDL3 core + stb_vorbis)
+- GUI library (pure Orhon over 2D renderer)
 
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
@@ -144,12 +147,12 @@ A comprehensive collection of multimedia, gaming, and GUI libraries for the Orho
 ### Platform Layer
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| SDL3 | 3.x (system) | Window creation, input, Vulkan surface, timing | Already implemented and working in the codebase (`tamga_sdl3`). SDL3 is a complete rewrite of SDL2 — unified event model, better Vulkan integration (`SDL_Vulkan_CreateSurface`, `SDL_Vulkan_GetInstanceExtensions`), first-class gamepad support. The `#linkC "SDL3"` directive works confirmed by bugs.txt. |
+| SDL3 | 3.x (system) | Window creation, input, Vulkan surface, timing | Already implemented and working in the codebase (`tamga_sdl3`). SDL3 is a complete rewrite of SDL2 — unified event model, better Vulkan integration (`SDL_Vulkan_CreateSurface`, `SDL_Vulkan_GetInstanceExtensions`), first-class gamepad support. The `#cimport = { name: "SDL3", include: "SDL3/SDL.h" }` directive works. |
 | SDL3_mixer | 3.x (system) | Audio mixing, WAV/OGG playback | Part of the SDL3 family. Handles WAV (sound effects) and OGG (music streaming) in one library. Eliminates the need to write a custom audio mixer, which is deep DSP territory not appropriate for a framework bootstrap. Alternative: raw `SDL_AudioStream` from SDL3 core (no extra dep, but requires manual OGG decoding). |
 ### Graphics API
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| Vulkan | 1.0 minimum (target 1.2+) | GPU rendering backend for both 2D and 3D renderers | Already used in `tamga_vk3d`. The `#linkC "vulkan"` directive is confirmed working. Targeting 1.0 feature set as done in the prototype ensures maximum hardware compatibility. Vulkan 1.2 promoted many critical extensions (buffer device address, descriptor indexing) to core — consider `apiVersion = makeVersion(1, 2, 0)` in the VkApplicationInfo once the renderers need bindless. |
+| Vulkan | 1.0 minimum (target 1.2+) | GPU rendering backend for both 2D and 3D renderers | Already used in `tamga_vk3d`. The `#cimport = { name: "vulkan", include: "..." }` directive is confirmed working. Targeting 1.0 feature set as done in the prototype ensures maximum hardware compatibility. Vulkan 1.2 promoted many critical extensions (buffer device address, descriptor indexing) to core — consider `apiVersion = makeVersion(1, 2, 0)` in the VkApplicationInfo once the renderers need bindless. |
 | VMA (Vulkan Memory Allocator) | 3.x | GPU memory allocation | Raw `vkAllocateMemory` per-buffer is the #1 Vulkan performance pitfall. VMA batches suballocations, handles alignment, and supports defragmentation. It is a single-header C library — one `.zig` sidecar file bridges it with no external build complexity. Every production Vulkan renderer uses this or an equivalent. |
 | SPIR-V (offline compiled shaders) | — | Shader format | Shaders compiled offline with `glslangValidator` or `glslc` to `.spv` files, loaded at runtime. No runtime shader compilation needed. Ship `.spv` bytecode in the binary or alongside it. |
 ### Audio Backend
@@ -162,9 +165,7 @@ A comprehensive collection of multimedia, gaming, and GUI libraries for the Orho
 |-----------|----------|-----|
 | Immediate mode GUI | Custom implementation in Orhon using the 2D renderer | Dear ImGui is the industry standard but is C++, not C — the Zig bridge handles C but C++ bindings (cimgui) add significant complexity and maintenance surface. Given that Tamga is also a language stress test, building a simple IMGUI layer in pure Orhon is the right call. |
 | Retained mode GUI | Custom widget tree in Orhon | Same rationale. A retained widget tree (node hierarchy, dirty flags, layout engine) is straightforward to implement cleanly in Orhon and serves as a strong language stress test for generics and ownership. |
-- Use `cimgui` (C wrapper around Dear ImGui v1.91.x) via Zig bridge as a stopgap for immediate mode
-- For retained mode, there is no dominant C GUI library suitable for games — Clay (single-header C, UI layout) is gaining traction in 2025 for simple cases
-- **Confidence on cimgui/Clay: LOW** — based on training data, not freshly verified
+- Pure Orhon GUI — no external GUI libraries. Serves as a strong language stress test for generics and ownership.
 ### Supporting C Libraries (via Zig bridge sidecar)
 | Library | Version | Purpose | Notes |
 |---------|---------|---------|-------|
@@ -213,7 +214,7 @@ A comprehensive collection of multimedia, gaming, and GUI libraries for the Orho
 | SPIR-V offline shaders | HIGH | Standard practice; glslc is part of the Vulkan SDK already required for validation layers |
 ## Sources
 - Existing codebase: `/src/TamgaVK3D/tamga_vk3d.zig`, `/src/TamgaSDL3/tamga_sdl3.zig` — HIGH confidence (working code)
-- `/docs/bugs.txt` — confirms `#linkC` directive works, SDL3 bridge functional
+- `/docs/bugs.md` — confirms `#cimport` directive works, SDL3 bridge functional
 - CLAUDE.md — confirms Zig 0.15.x, `#dep` non-fetching model, bridge pattern constraints
 - SDL3 API surface inferred from existing `tamga_sdl3.zig` (`SDL_Init`, `SDL_AudioStream` family available in SDL3 core) — MEDIUM confidence
 - VMA (Vulkan Memory Allocator) — widely documented, gpuopen.com/projects/vulkenmemoryallocator — MEDIUM confidence (version not freshly checked)

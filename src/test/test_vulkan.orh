@@ -18,10 +18,8 @@ import std::console
 // implemented in main.zig — they return pointers to static float arrays.
 // This pattern avoids the need for raw array literals in Orhon.
 //
-// NOTE: Negative float literals are not valid as direct call arguments in Orhon — use variables.
-// NOTE: defer is not used for tex/mat cleanup — Orhon defer captures by move,
-//       which conflicts with subsequent const-borrow uses of those variables.
-//       Explicit cleanup at each exit point instead.
+// NOTE: defer is not used for tex/mat cleanup — explicit cleanup at each exit
+//       point ensures correct ordering when multiple resources depend on each other.
 
 pub func run_vulkan_test() void {
     console.println("--- Vulkan Renderer Test (Texture + Material + Lighting) ---")
@@ -84,10 +82,7 @@ pub func run_vulkan_test() void {
     console.println("Material created: ok")
 
     // Set up one directional light (key light from upper-left front).
-    const light_dir_x: f32 = 0.0 - 0.5
-    const light_dir_y: f32 = 0.0 - 1.0
-    const light_dir_z: f32 = 0.0 - 0.3
-    ren.setDirLight(0, light_dir_x, light_dir_y, light_dir_z, 1.0, 1.0, 0.9)
+    ren.setDirLight(0, -0.5, -1.0, -0.3, 1.0, 1.0, 0.9)
     ren.setLightCounts(1, 0)
 
     console.println("Directional light configured")
