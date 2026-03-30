@@ -1,6 +1,6 @@
 # Language Ideas
 
-- Should we have a separate folder for compiled dynamic libraries? (clutters src dir)
+- ~~Should we have a separate folder for compiled dynamic libraries?~~ — BLOCKED. Splitting exe (`bin/`) and lib (`lib/`) breaks runtime discovery — the exe can't find the `.so` without an rpath. Needs rpath support in the compiler first. Keeping everything in `bin/` for now.
 
 - When a dynamic lib gets compiled, it gets an interface file — should the interface be tagged as `interface` instead of `module`?
 
