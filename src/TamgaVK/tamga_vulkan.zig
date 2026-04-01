@@ -495,3 +495,274 @@ pub export fn vma_staging_write(
     out_offset.* = region.offset;
     return c.VK_SUCCESS;
 }
+
+// ---- Render Graph ----
+//
+// Ordered pass execution with automatic barrier insertion.
+// The graph manages a sequence of graphics and compute passes. Between passes,
+// image and buffer memory barriers are inserted. The graph is built once at
+// renderer init and rebuilt on swapchain resize — not per-frame.
+//
+// Usage:
+//   var graph = RenderGraph.init();
+//   const pass0 = graph.addGraphicsPass(.{ .render_pass = rp, ... });
+//   graph.addImageBarrier(pass0, .{ .image = depth_img, ... });
+//   // per frame:
+//   graph.setPassUserData(pass0, @ptrCast(ctx));
+//   graph.execute(cmd, image_index);
+
+const RG_MAX_PASSES: u32 = 8;
+const RG_MAX_CLEAR_VALUES: u32 = 4;
+const RG_MAX_IMAGE_BARRIERS: u32 = 4;
+const RG_MAX_BUFFER_BARRIERS: u32 = 4;
+
+// Callback invoked during pass execution. Records draw/dispatch commands.
+pub const ExecuteFn = *const fn (cmd: c.VkCommandBuffer, user_data: ?*anyopaque) void;
+
+// Configuration for adding a graphics (rasterization) pass.
+pub const GraphicsPassConfig = struct {
+    render_pass: c.VkRenderPass,
+    framebuffers: *const [8]c.VkFramebuffer,
+    extent: c.VkExtent2D,
+    clear_values: []const c.VkClearValue,
+    execute_fn: ExecuteFn,
+    user_data: ?*anyopaque = null,
+};
+
+// Configuration for adding a compute (dispatch) pass.
+pub const ComputePassConfig = struct {
+    execute_fn: ExecuteFn,
+    user_data: ?*anyopaque = null,
+};
+
+// Image memory barrier between passes.
+pub const ImageBarrier = struct {
+    image: c.VkImage,
+    old_layout: c.VkImageLayout,
+    new_layout: c.VkImageLayout,
+    src_stage: c.VkPipelineStageFlags,
+    dst_stage: c.VkPipelineStageFlags,
+    src_access: c.VkAccessFlags,
+    dst_access: c.VkAccessFlags,
+    aspect_mask: c.VkImageAspectFlags = c.VK_IMAGE_ASPECT_COLOR_BIT,
+};
+
+// Buffer memory barrier between passes.
+pub const BufferBarrier = struct {
+    buffer: c.VkBuffer,
+    size: c.VkDeviceSize = std.math.maxInt(u64), // VK_WHOLE_SIZE
+    offset: c.VkDeviceSize = 0,
+    src_stage: c.VkPipelineStageFlags,
+    dst_stage: c.VkPipelineStageFlags,
+    src_access: c.VkAccessFlags,
+    dst_access: c.VkAccessFlags,
+};
+
+const PassType = enum { graphics, compute };
+
+const Pass = struct {
+    pass_type: PassType = .graphics,
+    // Graphics pass fields
+    render_pass: c.VkRenderPass = null,
+    framebuffers: ?*const [8]c.VkFramebuffer = null,
+    extent: c.VkExtent2D = .{ .width = 0, .height = 0 },
+    clear_values: [RG_MAX_CLEAR_VALUES]c.VkClearValue = undefined,
+    clear_value_count: u32 = 0,
+    // Common
+    execute_fn: ?ExecuteFn = null,
+    user_data: ?*anyopaque = null,
+};
+
+const Transition = struct {
+    image_barriers: [RG_MAX_IMAGE_BARRIERS]ImageBarrier = undefined,
+    image_count: u32 = 0,
+    buffer_barriers: [RG_MAX_BUFFER_BARRIERS]BufferBarrier = undefined,
+    buffer_count: u32 = 0,
+};
+
+pub const RenderGraph = struct {
+    passes: [RG_MAX_PASSES]Pass = [_]Pass{.{}} ** RG_MAX_PASSES,
+    pass_count: u32 = 0,
+    // transitions[i] runs AFTER pass[i] completes
+    transitions: [RG_MAX_PASSES]Transition = [_]Transition{.{}} ** RG_MAX_PASSES,
+
+    pub fn init() RenderGraph {
+        return .{};
+    }
+
+    // Add a graphics (rasterization) pass. Returns the pass index.
+    pub fn addGraphicsPass(self: *RenderGraph, config: GraphicsPassConfig) u32 {
+        if (self.pass_count >= RG_MAX_PASSES) return self.pass_count -| 1;
+        const idx = self.pass_count;
+        var pass = &self.passes[idx];
+        pass.pass_type = .graphics;
+        pass.render_pass = config.render_pass;
+        pass.framebuffers = config.framebuffers;
+        pass.extent = config.extent;
+        pass.execute_fn = config.execute_fn;
+        pass.user_data = config.user_data;
+        const count: u32 = @intCast(@min(config.clear_values.len, RG_MAX_CLEAR_VALUES));
+        var ci: u32 = 0;
+        while (ci < count) : (ci += 1) {
+            pass.clear_values[ci] = config.clear_values[ci];
+        }
+        pass.clear_value_count = count;
+        self.pass_count += 1;
+        return idx;
+    }
+
+    // Add a compute (dispatch) pass. Returns the pass index.
+    pub fn addComputePass(self: *RenderGraph, config: ComputePassConfig) u32 {
+        if (self.pass_count >= RG_MAX_PASSES) return self.pass_count -| 1;
+        const idx = self.pass_count;
+        var pass = &self.passes[idx];
+        pass.pass_type = .compute;
+        pass.execute_fn = config.execute_fn;
+        pass.user_data = config.user_data;
+        self.pass_count += 1;
+        return idx;
+    }
+
+    // Add an image memory barrier after the specified pass.
+    pub fn addImageBarrier(self: *RenderGraph, after_pass: u32, barrier: ImageBarrier) void {
+        if (after_pass >= self.pass_count) return;
+        var t = &self.transitions[after_pass];
+        if (t.image_count >= RG_MAX_IMAGE_BARRIERS) return;
+        t.image_barriers[t.image_count] = barrier;
+        t.image_count += 1;
+    }
+
+    // Add a buffer memory barrier after the specified pass.
+    pub fn addBufferBarrier(self: *RenderGraph, after_pass: u32, barrier: BufferBarrier) void {
+        if (after_pass >= self.pass_count) return;
+        var t = &self.transitions[after_pass];
+        if (t.buffer_count >= RG_MAX_BUFFER_BARRIERS) return;
+        t.buffer_barriers[t.buffer_count] = barrier;
+        t.buffer_count += 1;
+    }
+
+    // Update clear values for a graphics pass (e.g. when clear color changes).
+    pub fn updatePassClearValues(self: *RenderGraph, pass_index: u32, clear_values: []const c.VkClearValue) void {
+        if (pass_index >= self.pass_count) return;
+        var pass = &self.passes[pass_index];
+        if (pass.pass_type != .graphics) return;
+        const count: u32 = @intCast(@min(clear_values.len, RG_MAX_CLEAR_VALUES));
+        var ci: u32 = 0;
+        while (ci < count) : (ci += 1) {
+            pass.clear_values[ci] = clear_values[ci];
+        }
+        pass.clear_value_count = count;
+    }
+
+    // Update extent for a graphics pass (e.g. on swapchain resize).
+    pub fn updatePassExtent(self: *RenderGraph, pass_index: u32, extent: c.VkExtent2D) void {
+        if (pass_index >= self.pass_count) return;
+        self.passes[pass_index].extent = extent;
+    }
+
+    // Set user_data for a pass callback. Call before execute() each frame.
+    pub fn setPassUserData(self: *RenderGraph, pass_index: u32, user_data: ?*anyopaque) void {
+        if (pass_index >= self.pass_count) return;
+        self.passes[pass_index].user_data = user_data;
+    }
+
+    // Execute all passes in order with barriers between them.
+    pub fn execute(self: *RenderGraph, cmd: c.VkCommandBuffer, image_index: u32) void {
+        var i: u32 = 0;
+        while (i < self.pass_count) : (i += 1) {
+            const pass = &self.passes[i];
+            switch (pass.pass_type) {
+                .graphics => executeGraphicsPass(cmd, pass, image_index),
+                .compute => executeComputePass(cmd, pass),
+            }
+            self.insertTransition(cmd, i);
+        }
+    }
+
+    // Clear all passes and barriers. Call before rebuilding the graph.
+    pub fn reset(self: *RenderGraph) void {
+        self.pass_count = 0;
+        self.transitions = [_]Transition{.{}} ** RG_MAX_PASSES;
+    }
+
+    fn executeGraphicsPass(cmd: c.VkCommandBuffer, pass: *const Pass, image_index: u32) void {
+        const fb = pass.framebuffers orelse return;
+        const rp_info = c.VkRenderPassBeginInfo{
+            .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .pNext = null,
+            .renderPass = pass.render_pass,
+            .framebuffer = fb[image_index],
+            .renderArea = .{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = pass.extent,
+            },
+            .clearValueCount = pass.clear_value_count,
+            .pClearValues = &pass.clear_values,
+        };
+        c.vkCmdBeginRenderPass(cmd, &rp_info, c.VK_SUBPASS_CONTENTS_INLINE);
+        if (pass.execute_fn) |func| func(cmd, pass.user_data);
+        c.vkCmdEndRenderPass(cmd);
+    }
+
+    fn executeComputePass(cmd: c.VkCommandBuffer, pass: *const Pass) void {
+        if (pass.execute_fn) |func| func(cmd, pass.user_data);
+    }
+
+    fn insertTransition(self: *const RenderGraph, cmd: c.VkCommandBuffer, pass_index: u32) void {
+        const t = &self.transitions[pass_index];
+        if (t.image_count == 0 and t.buffer_count == 0) return;
+
+        var vk_img: [RG_MAX_IMAGE_BARRIERS]c.VkImageMemoryBarrier = undefined;
+        var src_stage: c.VkPipelineStageFlags = 0;
+        var dst_stage: c.VkPipelineStageFlags = 0;
+
+        var ib: u32 = 0;
+        while (ib < t.image_count) : (ib += 1) {
+            const b = &t.image_barriers[ib];
+            vk_img[ib] = c.VkImageMemoryBarrier{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = null,
+                .srcAccessMask = b.src_access,
+                .dstAccessMask = b.dst_access,
+                .oldLayout = b.old_layout,
+                .newLayout = b.new_layout,
+                .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .image = b.image,
+                .subresourceRange = .{
+                    .aspectMask = b.aspect_mask,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+            src_stage |= b.src_stage;
+            dst_stage |= b.dst_stage;
+        }
+
+        var vk_buf: [RG_MAX_BUFFER_BARRIERS]c.VkBufferMemoryBarrier = undefined;
+        var bb: u32 = 0;
+        while (bb < t.buffer_count) : (bb += 1) {
+            const b = &t.buffer_barriers[bb];
+            vk_buf[bb] = c.VkBufferMemoryBarrier{
+                .sType = c.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                .pNext = null,
+                .srcAccessMask = b.src_access,
+                .dstAccessMask = b.dst_access,
+                .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .buffer = b.buffer,
+                .offset = b.offset,
+                .size = b.size,
+            };
+            src_stage |= b.src_stage;
+            dst_stage |= b.dst_stage;
+        }
+
+        const img_ptr: ?[*]const c.VkImageMemoryBarrier = if (t.image_count > 0) &vk_img else null;
+        const buf_ptr: ?[*]const c.VkBufferMemoryBarrier = if (t.buffer_count > 0) &vk_buf else null;
+
+        c.vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, null, t.buffer_count, buf_ptr, t.image_count, img_ptr);
+    }
+};

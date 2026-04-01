@@ -1,5 +1,6 @@
 const std = @import("std");
 const vma = @import("tamga_vulkan_bridge");
+const rg = @import("tamga_vulkan_bridge");
 const c = @import("vulkan_c").c;
 // SDL types are imported via a local @cImport since SDL headers are only used in this module.
 const sdl = @cImport({
@@ -18,47 +19,20 @@ const stbi = struct {
 
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 
-// ---- render graph ----
+// ---- draw call list ----
 //
-// Godot-inspired declarative pass system. For the clear-screen scope, this
-// manages a single graphics pass. The data structures are designed so adding
-// geometry passes, compute passes, and multi-pass pipelines later requires
-// no refactoring of the graph infrastructure.
+// draw() collects draw calls into a list. The render graph's forward pass
+// callback iterates this list to record Vulkan commands. This allows the
+// graph to control pass begin/end and insert barriers between passes.
 
-const RenderGraph = struct {
-    current_image_index: u32 = 0,
+const MAX_DRAW_CALLS: u32 = 256;
 
-    fn init() RenderGraph {
-        return RenderGraph{};
-    }
-
-    fn execute(
-        self: *RenderGraph,
-        command_buffer: c.VkCommandBuffer,
-        render_pass: c.VkRenderPass,
-        framebuffer: c.VkFramebuffer,
-        extent: c.VkExtent2D,
-        clear_values: []const c.VkClearValue,
-    ) void {
-        _ = self;
-
-        const render_pass_info = c.VkRenderPassBeginInfo{
-            .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-            .pNext = null,
-            .renderPass = render_pass,
-            .framebuffer = framebuffer,
-            .renderArea = .{
-                .offset = .{ .x = 0, .y = 0 },
-                .extent = extent,
-            },
-            .clearValueCount = @intCast(clear_values.len),
-            .pClearValues = clear_values.ptr,
-        };
-
-        c.vkCmdBeginRenderPass(command_buffer, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
-        // render pass is now open — draw calls are recorded between beginFrame and endFrame
-        // endFrame calls vkCmdEndRenderPass before submitting
-    }
+const DrawCall = struct {
+    vertex_buffer: c.VkBuffer,
+    index_buffer: c.VkBuffer,
+    index_count: u32,
+    material_descriptor_set: c.VkDescriptorSet,
+    model_matrix: [16]f32,
 };
 
 // ---- error types for bridge ----
@@ -75,31 +49,31 @@ pub const CameraUBO = extern struct {
     _pad: f32 = 0.0,
 };
 
-// ---- LightUBOData (std140 layout, matches mesh.frag.glsl exactly) ----
-// DirLightData: direction vec4 (16) + color vec4 (16) = 32 bytes
-// PointLightData: position vec4 (16) + color vec4 (16) + constant/linear/quadratic/pad (16) = 48 bytes
-// 4 dir lights (128) + 8 point lights (384) + counts + pad (16) = 528 bytes
+// ---- Light data (std430 layout, matches mesh.frag.glsl LightSSBO) ----
+// Unified light struct: type field distinguishes directional/point/spot.
+// 80 bytes per light (5 x vec4).
 
-pub const DirLightData = extern struct {
-    direction: [4]f32 = [_]f32{0.0} ** 4, // vec4, w unused
-    color: [4]f32 = [_]f32{0.0} ** 4, // vec4, w unused
+const MAX_LIGHTS: u32 = 256;
+const MAX_DIR_LIGHTS: u32 = 4;
+const MAX_POINT_LIGHTS: u32 = 126;
+const MAX_SPOT_LIGHTS: u32 = 126;
+
+const LIGHT_TYPE_DIRECTIONAL: f32 = 0.0;
+const LIGHT_TYPE_POINT: f32 = 1.0;
+const LIGHT_TYPE_SPOT: f32 = 2.0;
+
+pub const LightData = extern struct {
+    position_range: [4]f32 = [_]f32{0.0} ** 4, // xyz = position, w = range
+    direction_type: [4]f32 = [_]f32{0.0} ** 4, // xyz = direction, w = type (0/1/2)
+    color: [4]f32 = [_]f32{0.0} ** 4, // rgb = color, w unused
+    attenuation: [4]f32 = [4]f32{ 1.0, 0.0, 0.0, 0.0 }, // constant, linear, quadratic, unused
+    spot_params: [4]f32 = [_]f32{0.0} ** 4, // cos(inner), cos(outer), unused, unused
 };
 
-pub const PointLightData = extern struct {
-    position: [4]f32 = [_]f32{0.0} ** 4, // vec4, w unused
-    color: [4]f32 = [_]f32{0.0} ** 4, // vec4, w unused
-    constant: f32 = 1.0,
-    linear: f32 = 0.09,
-    quadratic: f32 = 0.032,
-    _pad: f32 = 0.0,
-};
-
-const LightUBOData = extern struct {
-    dir_lights: [4]DirLightData = [_]DirLightData{.{}} ** 4,
-    point_lights: [8]PointLightData = [_]PointLightData{.{}} ** 8,
-    num_dir_lights: i32 = 0,
-    num_point_lights: i32 = 0,
-    _pad: [2]i32 = [_]i32{0} ** 2,
+// SSBO header (16 bytes, matches shader layout)
+const LightSSBOHeader = extern struct {
+    num_lights: i32 = 0,
+    _pad: [3]i32 = [_]i32{0} ** 3,
 };
 
 // ---- MaterialUBOData (std140 layout, matches mesh.frag.glsl exactly) ----
@@ -180,9 +154,12 @@ const VulkanContext = struct {
     depth_allocation: vma.VmaAllocation = undefined,
     depth_format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
 
-    // render pass + framebuffers
+    // render passes + framebuffers
     render_pass: c.VkRenderPass = null,
     framebuffers: [8]c.VkFramebuffer = [_]c.VkFramebuffer{null} ** 8,
+    // depth prepass
+    depth_render_pass: c.VkRenderPass = null,
+    depth_framebuffers: [8]c.VkFramebuffer = [_]c.VkFramebuffer{null} ** 8,
 
     // commands
     command_pool: c.VkCommandPool = null,
@@ -198,11 +175,16 @@ const VulkanContext = struct {
     sdl_window: ?*sdl.SDL_Window = null,
     debug_mode: bool = false,
 
-    // render graph
-    graph: RenderGraph = RenderGraph.init(),
+    // render graph (tamga_render_graph library)
+    graph: rg.RenderGraph = rg.RenderGraph.init(),
+    graph_image_index: u32 = 0,
 
     // clear colors (index 0 = color, index 1 = depth)
     clear_color: c.VkClearValue = .{ .color = .{ .float32 = [4]f32{ 0.0, 0.0, 0.0, 1.0 } } },
+
+    // draw call list (filled by draw(), consumed by forward pass callback)
+    draw_list: [MAX_DRAW_CALLS]DrawCall = undefined,
+    draw_count: u32 = 0,
 
     // state
     framebuffer_resized: bool = false,
@@ -211,11 +193,30 @@ const VulkanContext = struct {
     vma_ctx: vma.VmaContext = undefined,
     vma_initialized: bool = false,
 
-    // graphics pipeline
+    // graphics pipelines
     pipeline: c.VkPipeline = null,
+    depth_pipeline: c.VkPipeline = null,
     pipeline_layout: c.VkPipelineLayout = null,
     descriptor_set_layout_0: c.VkDescriptorSetLayout = null,
     descriptor_set_layout_1: c.VkDescriptorSetLayout = null,
+
+    // compute pipeline (light culling)
+    compute_pipeline: c.VkPipeline = null,
+    compute_pipeline_layout: c.VkPipelineLayout = null,
+    compute_descriptor_set_layout: c.VkDescriptorSetLayout = null,
+    compute_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSet = [_]c.VkDescriptorSet{null} ** MAX_FRAMES_IN_FLIGHT,
+
+    // cluster resources
+    light_grid_ssbo: vma.BufferAlloc = undefined,
+    light_index_ssbo: vma.BufferAlloc = undefined,
+    light_grid_size: u32 = 0,
+    light_index_size: u32 = 0,
+    cluster_tiles_x: u32 = 0,
+    cluster_tiles_y: u32 = 0,
+    cluster_depth_slices: u32 = 24,
+    cluster_tile_size: u32 = 16,
+    clusters_initialized: bool = false,
+    depth_sampler: c.VkSampler = null,
 
     // descriptor pool and per-frame sets
     descriptor_pool: c.VkDescriptorPool = null,
@@ -224,12 +225,19 @@ const VulkanContext = struct {
     // UBOs (double-buffered)
     camera_ubos: [MAX_FRAMES_IN_FLIGHT]vma.BufferAlloc = undefined,
     camera_mapped: [MAX_FRAMES_IN_FLIGHT][*]u8 = undefined,
-    light_ubos: [MAX_FRAMES_IN_FLIGHT]vma.BufferAlloc = undefined,
+    // Light SSBOs (double-buffered) — replaces fixed-size UBO for variable light count
+    light_ssbos: [MAX_FRAMES_IN_FLIGHT]vma.BufferAlloc = undefined,
     light_mapped: [MAX_FRAMES_IN_FLIGHT][*]u8 = undefined,
+    light_ssbo_size: u32 = 0,
     ubos_initialized: bool = false,
 
-    // Accumulated light state — written to UBO at next beginFrame or setLights call
-    pending_lights: LightUBOData = .{},
+    // Accumulated light state — packed into SSBO at beginFrame
+    pending_dir_lights: [MAX_DIR_LIGHTS]LightData = [_]LightData{.{}} ** MAX_DIR_LIGHTS,
+    pending_point_lights: [MAX_POINT_LIGHTS]LightData = [_]LightData{.{}} ** MAX_POINT_LIGHTS,
+    pending_spot_lights: [MAX_SPOT_LIGHTS]LightData = [_]LightData{.{}} ** MAX_SPOT_LIGHTS,
+    num_dir_lights: u32 = 0,
+    num_point_lights: u32 = 0,
+    num_spot_lights: u32 = 0,
 
     // Default 1x1 white texture — bound when a material has no texture assigned
     default_texture: Texture = undefined,
@@ -701,12 +709,13 @@ fn findDepthFormat(physical_device: c.VkPhysicalDevice) c.VkFormat {
 fn createDepthResources(ctx: *VulkanContext) anyerror!void {
     ctx.depth_format = findDepthFormat(ctx.physical_device);
 
-    // Create depth image via VMA with MSAA sample count
+    // Create depth image via VMA with MSAA sample count.
+    // SAMPLED_BIT: compute shader reads depth for cluster light culling.
     const image_alloc = try ctx.vma_ctx.createImageWithSamples(
         ctx.swapchain_extent.width,
         ctx.swapchain_extent.height,
         ctx.depth_format,
-        c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT,
         true, // gpu_only: device-local
         ctx.msaa_samples,
     );
@@ -824,17 +833,18 @@ fn createRenderPass(ctx: *VulkanContext) c.VkResult {
         .finalLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
     };
 
-    // Attachment [1]: MSAA depth — rendered to, not stored
+    // Attachment [1]: MSAA depth — loaded from depth prepass, read-only.
+    // Uses READ_ONLY_OPTIMAL: compatible with both depth testing and shader sampling.
     const depth_attachment = c.VkAttachmentDescription{
         .flags = 0,
         .format = ctx.depth_format,
         .samples = ctx.msaa_samples,
-        .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .loadOp = c.VK_ATTACHMENT_LOAD_OP_LOAD,
         .storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .initialLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        .finalLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
     };
 
     // Attachment [2]: Resolve / swapchain — receives resolved output, must be stored
@@ -857,7 +867,7 @@ fn createRenderPass(ctx: *VulkanContext) c.VkResult {
 
     const depth_ref = c.VkAttachmentReference{
         .attachment = 1,
-        .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
     };
 
     const resolve_ref = c.VkAttachmentReference{
@@ -911,6 +921,511 @@ fn createRenderPass(ctx: *VulkanContext) c.VkResult {
     };
 
     return c.vkCreateRenderPass(ctx.device, &render_pass_info, null, &ctx.render_pass);
+}
+
+// ---- depth prepass render pass ----
+
+fn createDepthRenderPass(ctx: *VulkanContext) c.VkResult {
+    // Single attachment: depth (CLEAR + STORE, no color)
+    const depth_attachment = c.VkAttachmentDescription{
+        .flags = 0,
+        .format = ctx.depth_format,
+        .samples = ctx.msaa_samples,
+        .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+
+    const depth_ref = c.VkAttachmentReference{
+        .attachment = 0,
+        .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+
+    const subpass = c.VkSubpassDescription{
+        .flags = 0,
+        .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .inputAttachmentCount = 0,
+        .pInputAttachments = null,
+        .colorAttachmentCount = 0,
+        .pColorAttachments = null,
+        .pResolveAttachments = null,
+        .pDepthStencilAttachment = &depth_ref,
+        .preserveAttachmentCount = 0,
+        .pPreserveAttachments = null,
+    };
+
+    const dependency = c.VkSubpassDependency{
+        .srcSubpass = c.VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .dstStageMask = c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .srcAccessMask = 0,
+        .dstAccessMask = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        .dependencyFlags = 0,
+    };
+
+    const render_pass_info = c.VkRenderPassCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .attachmentCount = 1,
+        .pAttachments = &[1]c.VkAttachmentDescription{depth_attachment},
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = 1,
+        .pDependencies = &dependency,
+    };
+
+    return c.vkCreateRenderPass(ctx.device, &render_pass_info, null, &ctx.depth_render_pass);
+}
+
+// ---- depth prepass framebuffers ----
+
+fn createDepthFramebuffers(ctx: *VulkanContext) c.VkResult {
+    // All depth framebuffers use the same depth image view (depth buffer is shared)
+    var i: u32 = 0;
+    while (i < ctx.swapchain_image_count) : (i += 1) {
+        const fb_info = c.VkFramebufferCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .renderPass = ctx.depth_render_pass,
+            .attachmentCount = 1,
+            .pAttachments = &[1]c.VkImageView{ctx.depth_image_view},
+            .width = ctx.swapchain_extent.width,
+            .height = ctx.swapchain_extent.height,
+            .layers = 1,
+        };
+
+        const result = c.vkCreateFramebuffer(ctx.device, &fb_info, null, &ctx.depth_framebuffers[i]);
+        if (result != c.VK_SUCCESS) return result;
+    }
+    return c.VK_SUCCESS;
+}
+
+// ---- depth prepass pipeline ----
+
+fn createDepthPipeline(ctx: *VulkanContext) anyerror!void {
+    const vert_module = loadShaderModule(ctx.device, "assets/shaders/depth.vert.spv") orelse {
+        std.debug.print("[TamgaVK3D] Failed to load depth.vert.spv\n", .{});
+        return VkBridgeError.VulkanFailed;
+    };
+    defer c.vkDestroyShaderModule(ctx.device, vert_module, null);
+
+    const frag_module = loadShaderModule(ctx.device, "assets/shaders/depth.frag.spv") orelse {
+        std.debug.print("[TamgaVK3D] Failed to load depth.frag.spv\n", .{});
+        return VkBridgeError.VulkanFailed;
+    };
+    defer c.vkDestroyShaderModule(ctx.device, frag_module, null);
+
+    const shader_stages = [2]c.VkPipelineShaderStageCreateInfo{
+        .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vert_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        },
+        .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = frag_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        },
+    };
+
+    // Same vertex input as forward pipeline (D-05 format)
+    const vertex_binding = c.VkVertexInputBindingDescription{
+        .binding = 0,
+        .stride = 48,
+        .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+
+    const vertex_attributes = [4]c.VkVertexInputAttributeDescription{
+        .{ .location = 0, .binding = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
+        .{ .location = 1, .binding = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 12 },
+        .{ .location = 2, .binding = 0, .format = c.VK_FORMAT_R32G32_SFLOAT, .offset = 24 },
+        .{ .location = 3, .binding = 0, .format = c.VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 32 },
+    };
+
+    const vertex_input_info = c.VkPipelineVertexInputStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &vertex_binding,
+        .vertexAttributeDescriptionCount = 4,
+        .pVertexAttributeDescriptions = &vertex_attributes,
+    };
+
+    const input_assembly = c.VkPipelineInputAssemblyStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = c.VK_FALSE,
+    };
+
+    const dynamic_states = [2]c.VkDynamicState{
+        c.VK_DYNAMIC_STATE_VIEWPORT,
+        c.VK_DYNAMIC_STATE_SCISSOR,
+    };
+
+    const dynamic_state_info = c.VkPipelineDynamicStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .dynamicStateCount = 2,
+        .pDynamicStates = &dynamic_states,
+    };
+
+    const viewport_state = c.VkPipelineViewportStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .viewportCount = 1,
+        .pViewports = null,
+        .scissorCount = 1,
+        .pScissors = null,
+    };
+
+    const rasterizer = c.VkPipelineRasterizationStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .depthClampEnable = c.VK_FALSE,
+        .rasterizerDiscardEnable = c.VK_FALSE,
+        .polygonMode = c.VK_POLYGON_MODE_FILL,
+        .cullMode = c.VK_CULL_MODE_BACK_BIT,
+        .frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .depthBiasEnable = c.VK_FALSE,
+        .depthBiasConstantFactor = 0.0,
+        .depthBiasClamp = 0.0,
+        .depthBiasSlopeFactor = 0.0,
+        .lineWidth = 1.0,
+    };
+
+    const multisampling = c.VkPipelineMultisampleStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .rasterizationSamples = ctx.msaa_samples,
+        .sampleShadingEnable = c.VK_FALSE,
+        .minSampleShading = 0.0,
+        .pSampleMask = null,
+        .alphaToCoverageEnable = c.VK_FALSE,
+        .alphaToOneEnable = c.VK_FALSE,
+    };
+
+    // Depth test LESS + write enabled (populate depth buffer)
+    const depth_stencil = c.VkPipelineDepthStencilStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .depthTestEnable = c.VK_TRUE,
+        .depthWriteEnable = c.VK_TRUE,
+        .depthCompareOp = c.VK_COMPARE_OP_LESS,
+        .depthBoundsTestEnable = c.VK_FALSE,
+        .stencilTestEnable = c.VK_FALSE,
+        .front = std.mem.zeroes(c.VkStencilOpState),
+        .back = std.mem.zeroes(c.VkStencilOpState),
+        .minDepthBounds = 0.0,
+        .maxDepthBounds = 1.0,
+    };
+
+    // No color attachments — depth-only pass
+    const color_blending = c.VkPipelineColorBlendStateCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .logicOpEnable = c.VK_FALSE,
+        .logicOp = c.VK_LOGIC_OP_COPY,
+        .attachmentCount = 0,
+        .pAttachments = null,
+        .blendConstants = [4]f32{ 0.0, 0.0, 0.0, 0.0 },
+    };
+
+    const pipeline_info = c.VkGraphicsPipelineCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .stageCount = 2,
+        .pStages = &shader_stages,
+        .pVertexInputState = &vertex_input_info,
+        .pInputAssemblyState = &input_assembly,
+        .pTessellationState = null,
+        .pViewportState = &viewport_state,
+        .pRasterizationState = &rasterizer,
+        .pMultisampleState = &multisampling,
+        .pDepthStencilState = &depth_stencil,
+        .pColorBlendState = &color_blending,
+        .pDynamicState = &dynamic_state_info,
+        .layout = ctx.pipeline_layout,
+        .renderPass = ctx.depth_render_pass,
+        .subpass = 0,
+        .basePipelineHandle = null,
+        .basePipelineIndex = -1,
+    };
+
+    const result = c.vkCreateGraphicsPipelines(ctx.device, null, 1, &pipeline_info, null, &ctx.depth_pipeline);
+    if (result != c.VK_SUCCESS) return VkBridgeError.VulkanFailed;
+}
+
+// ---- compute: cluster resources ----
+
+fn createClusterResources(ctx: *VulkanContext) anyerror!void {
+    ctx.cluster_tiles_x = (ctx.swapchain_extent.width + ctx.cluster_tile_size - 1) / ctx.cluster_tile_size;
+    ctx.cluster_tiles_y = (ctx.swapchain_extent.height + ctx.cluster_tile_size - 1) / ctx.cluster_tile_size;
+    const num_clusters = ctx.cluster_tiles_x * ctx.cluster_tiles_y * ctx.cluster_depth_slices;
+
+    // Light grid: uvec2 (8 bytes) per cluster
+    ctx.light_grid_size = num_clusters * 8;
+    const grid_alloc = try ctx.vma_ctx.createBuffer(
+        ctx.light_grid_size,
+        0x00000020, // VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+        true,
+    );
+    ctx.light_grid_ssbo = grid_alloc;
+
+    // Light index list: atomic counter (16 bytes header) + 1M indices (4 bytes each)
+    ctx.light_index_size = 16 + 1024 * 1024 * 4;
+    const index_alloc = try ctx.vma_ctx.createBuffer(
+        ctx.light_index_size,
+        0x00000020 | 0x00000002, // STORAGE_BUFFER | TRANSFER_DST (for clearing counter)
+        true,
+    );
+    ctx.light_index_ssbo = index_alloc;
+
+    ctx.clusters_initialized = true;
+}
+
+fn destroyClusterResources(ctx: *VulkanContext) void {
+    if (!ctx.clusters_initialized) return;
+    ctx.vma_ctx.destroyBuffer(ctx.light_grid_ssbo.buffer, ctx.light_grid_ssbo.allocation);
+    ctx.vma_ctx.destroyBuffer(ctx.light_index_ssbo.buffer, ctx.light_index_ssbo.allocation);
+    ctx.clusters_initialized = false;
+}
+
+// ---- compute: descriptor set layout + pipeline ----
+
+fn createComputeResources(ctx: *VulkanContext) anyerror!void {
+    // Depth sampler (used by compute shader via COMBINED_IMAGE_SAMPLER)
+    const sampler_info = c.VkSamplerCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .magFilter = c.VK_FILTER_NEAREST,
+        .minFilter = c.VK_FILTER_NEAREST,
+        .mipmapMode = c.VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .mipLodBias = 0.0,
+        .anisotropyEnable = c.VK_FALSE,
+        .maxAnisotropy = 1.0,
+        .compareEnable = c.VK_FALSE,
+        .compareOp = c.VK_COMPARE_OP_ALWAYS,
+        .minLod = 0.0,
+        .maxLod = 0.0,
+        .borderColor = c.VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
+        .unnormalizedCoordinates = c.VK_FALSE,
+    };
+    if (c.vkCreateSampler(ctx.device, &sampler_info, null, &ctx.depth_sampler) != c.VK_SUCCESS) {
+        return VkBridgeError.VulkanFailed;
+    }
+
+    // Compute descriptor set layout (set 1 for compute-specific resources)
+    const compute_bindings = [3]c.VkDescriptorSetLayoutBinding{
+        .{ // binding 0: depth texture (MSAA)
+            .binding = 0,
+            .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT,
+            .pImmutableSamplers = null,
+        },
+        .{ // binding 1: light grid (output)
+            .binding = 1,
+            .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT,
+            .pImmutableSamplers = null,
+        },
+        .{ // binding 2: light index list (output)
+            .binding = 2,
+            .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT,
+            .pImmutableSamplers = null,
+        },
+    };
+
+    const compute_layout_info = c.VkDescriptorSetLayoutCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .bindingCount = 3,
+        .pBindings = &compute_bindings,
+    };
+
+    if (c.vkCreateDescriptorSetLayout(ctx.device, &compute_layout_info, null, &ctx.compute_descriptor_set_layout) != c.VK_SUCCESS) {
+        return VkBridgeError.VulkanFailed;
+    }
+
+    // Compute pipeline layout: set 0 (camera+lights) + set 1 (compute resources) + push constants
+    const compute_push_range = c.VkPushConstantRange{
+        .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT,
+        .offset = 0,
+        .size = 32, // ClusterConfig: 8 x u32/f32
+    };
+
+    const compute_set_layouts = [2]c.VkDescriptorSetLayout{
+        ctx.descriptor_set_layout_0,
+        ctx.compute_descriptor_set_layout,
+    };
+
+    const compute_layout = c.VkPipelineLayoutCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .setLayoutCount = 2,
+        .pSetLayouts = &compute_set_layouts,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &compute_push_range,
+    };
+
+    if (c.vkCreatePipelineLayout(ctx.device, &compute_layout, null, &ctx.compute_pipeline_layout) != c.VK_SUCCESS) {
+        return VkBridgeError.VulkanFailed;
+    }
+
+    // Compute pipeline
+    const comp_module = loadShaderModule(ctx.device, "assets/shaders/light_cull.comp.spv") orelse {
+        std.debug.print("[TamgaVK3D] Failed to load light_cull.comp.spv\n", .{});
+        return VkBridgeError.VulkanFailed;
+    };
+    defer c.vkDestroyShaderModule(ctx.device, comp_module, null);
+
+    const compute_stage = c.VkPipelineShaderStageCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .stage = c.VK_SHADER_STAGE_COMPUTE_BIT,
+        .module = comp_module,
+        .pName = "main",
+        .pSpecializationInfo = null,
+    };
+
+    const compute_pipeline_info = c.VkComputePipelineCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .stage = compute_stage,
+        .layout = ctx.compute_pipeline_layout,
+        .basePipelineHandle = null,
+        .basePipelineIndex = -1,
+    };
+
+    if (c.vkCreateComputePipelines(ctx.device, null, 1, &compute_pipeline_info, null, &ctx.compute_pipeline) != c.VK_SUCCESS) {
+        return VkBridgeError.VulkanFailed;
+    }
+}
+
+fn allocateComputeDescriptorSets(ctx: *VulkanContext) anyerror!void {
+    // Allocate per-frame compute descriptor sets
+    var layouts: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSetLayout = undefined;
+    var i: u32 = 0;
+    while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
+        layouts[i] = ctx.compute_descriptor_set_layout;
+    }
+
+    const alloc_info = c.VkDescriptorSetAllocateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = null,
+        .descriptorPool = ctx.descriptor_pool,
+        .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+        .pSetLayouts = &layouts,
+    };
+
+    if (c.vkAllocateDescriptorSets(ctx.device, &alloc_info, &ctx.compute_descriptor_sets) != c.VK_SUCCESS) {
+        return VkBridgeError.VulkanFailed;
+    }
+
+    // Write compute descriptor sets
+    i = 0;
+    while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
+        const depth_img_info = c.VkDescriptorImageInfo{
+            .sampler = ctx.depth_sampler,
+            .imageView = ctx.depth_image_view,
+            .imageLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        };
+
+        const grid_buf_info = c.VkDescriptorBufferInfo{
+            .buffer = ctx.light_grid_ssbo.buffer,
+            .offset = 0,
+            .range = ctx.light_grid_size,
+        };
+
+        const index_buf_info = c.VkDescriptorBufferInfo{
+            .buffer = ctx.light_index_ssbo.buffer,
+            .offset = 0,
+            .range = ctx.light_index_size,
+        };
+
+        const writes = [3]c.VkWriteDescriptorSet{
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = ctx.compute_descriptor_sets[i],
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &depth_img_info,
+                .pBufferInfo = null,
+                .pTexelBufferView = null,
+            },
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = ctx.compute_descriptor_sets[i],
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &grid_buf_info,
+                .pTexelBufferView = null,
+            },
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = ctx.compute_descriptor_sets[i],
+                .dstBinding = 2,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &index_buf_info,
+                .pTexelBufferView = null,
+            },
+        };
+
+        c.vkUpdateDescriptorSets(ctx.device, 3, &writes, 0, null);
+    }
+}
+
+fn destroyComputeResources(ctx: *VulkanContext) void {
+    if (ctx.compute_pipeline != null) c.vkDestroyPipeline(ctx.device, ctx.compute_pipeline, null);
+    if (ctx.compute_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.device, ctx.compute_pipeline_layout, null);
+    if (ctx.compute_descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(ctx.device, ctx.compute_descriptor_set_layout, null);
+    if (ctx.depth_sampler != null) c.vkDestroySampler(ctx.device, ctx.depth_sampler, null);
 }
 
 // ---- framebuffers (color + depth) ----
@@ -1035,21 +1550,22 @@ fn loadShaderModule(device: c.VkDevice, path: [*:0]const u8) ?c.VkShaderModule {
 // ---- descriptor set layouts ----
 
 fn createDescriptorSetLayouts(ctx: *VulkanContext) c.VkResult {
-    // Set 0 (per-frame): binding 0 = CameraUBO (VERTEX | FRAGMENT), binding 1 = LightUBO (FRAGMENT)
+    // Set 0 (per-frame): binding 0 = CameraUBO, binding 1 = LightSSBO
+    // Accessible from VERTEX + FRAGMENT + COMPUTE (shared between graphics and compute passes)
     {
         const bindings = [2]c.VkDescriptorSetLayoutBinding{
             .{
                 .binding = 0,
                 .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                 .descriptorCount = 1,
-                .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT | c.VK_SHADER_STAGE_COMPUTE_BIT,
                 .pImmutableSamplers = null,
             },
             .{
                 .binding = 1,
-                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 .descriptorCount = 1,
-                .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT | c.VK_SHADER_STAGE_COMPUTE_BIT,
                 .pImmutableSamplers = null,
             },
         };
@@ -1104,28 +1620,66 @@ fn createDescriptorSetLayouts(ctx: *VulkanContext) c.VkResult {
 
 fn createUBOs(ctx: *VulkanContext) anyerror!void {
     const ubo_usage: u32 = 0x00000010; // VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
+    const ssbo_usage: u32 = 0x00000020; // VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+
+    // Light SSBO size: header (16 bytes) + MAX_LIGHTS * LightData (80 bytes each)
+    ctx.light_ssbo_size = @sizeOf(LightSSBOHeader) + MAX_LIGHTS * @sizeOf(LightData);
 
     var i: u32 = 0;
     while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
         // Camera UBO — host-visible + persistently mapped
         const cam_alloc = try ctx.vma_ctx.createBuffer(@sizeOf(CameraUBO), ubo_usage, false);
         ctx.camera_ubos[i] = cam_alloc;
-
-        // Map camera UBO
         ctx.camera_mapped[i] = ctx.vma_ctx.mapBuffer(cam_alloc.allocation) orelse return VkBridgeError.VulkanFailed;
 
-        // Light UBO
-        const light_alloc = try ctx.vma_ctx.createBuffer(@sizeOf(LightUBOData), ubo_usage, false);
-        ctx.light_ubos[i] = light_alloc;
-
-        // Map light UBO and zero it (no lights active by default)
+        // Light SSBO — host-visible + persistently mapped
+        const light_alloc = try ctx.vma_ctx.createBuffer(ctx.light_ssbo_size, ssbo_usage, false);
+        ctx.light_ssbos[i] = light_alloc;
         ctx.light_mapped[i] = ctx.vma_ctx.mapBuffer(light_alloc.allocation) orelse return VkBridgeError.VulkanFailed;
 
-        const default_light = LightUBOData{};
-        @memcpy(ctx.light_mapped[i][0..@sizeOf(LightUBOData)], std.mem.asBytes(&default_light));
+        // Zero the SSBO (no lights active by default)
+        const header = LightSSBOHeader{};
+        @memcpy(ctx.light_mapped[i][0..@sizeOf(LightSSBOHeader)], std.mem.asBytes(&header));
     }
 
     ctx.ubos_initialized = true;
+}
+
+// flushLightSSBO packs the pending per-type light arrays into the flat SSBO.
+// Layout: [header (16 bytes)] [dir lights] [point lights] [spot lights]
+fn flushLightSSBO(ctx: *VulkanContext, frame: u32) void {
+    const mapped = ctx.light_mapped[frame];
+    const header_size = @sizeOf(LightSSBOHeader);
+    const light_size = @sizeOf(LightData);
+    var offset: u32 = 0;
+
+    // Copy directional lights
+    var i: u32 = 0;
+    while (i < ctx.num_dir_lights) : (i += 1) {
+        const dst_start = header_size + offset * light_size;
+        @memcpy(mapped[dst_start .. dst_start + light_size], std.mem.asBytes(&ctx.pending_dir_lights[i]));
+        offset += 1;
+    }
+
+    // Copy point lights
+    i = 0;
+    while (i < ctx.num_point_lights) : (i += 1) {
+        const dst_start = header_size + offset * light_size;
+        @memcpy(mapped[dst_start .. dst_start + light_size], std.mem.asBytes(&ctx.pending_point_lights[i]));
+        offset += 1;
+    }
+
+    // Copy spot lights
+    i = 0;
+    while (i < ctx.num_spot_lights) : (i += 1) {
+        const dst_start = header_size + offset * light_size;
+        @memcpy(mapped[dst_start .. dst_start + light_size], std.mem.asBytes(&ctx.pending_spot_lights[i]));
+        offset += 1;
+    }
+
+    // Write header
+    const header = LightSSBOHeader{ .num_lights = @intCast(offset) };
+    @memcpy(mapped[0..header_size], std.mem.asBytes(&header));
 }
 
 fn destroyUBOs(ctx: *VulkanContext) void {
@@ -1134,8 +1688,8 @@ fn destroyUBOs(ctx: *VulkanContext) void {
     while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
         ctx.vma_ctx.unmapBuffer(ctx.camera_ubos[i].allocation);
         ctx.vma_ctx.destroyBuffer(ctx.camera_ubos[i].buffer, ctx.camera_ubos[i].allocation);
-        ctx.vma_ctx.unmapBuffer(ctx.light_ubos[i].allocation);
-        ctx.vma_ctx.destroyBuffer(ctx.light_ubos[i].buffer, ctx.light_ubos[i].allocation);
+        ctx.vma_ctx.unmapBuffer(ctx.light_ssbos[i].allocation);
+        ctx.vma_ctx.destroyBuffer(ctx.light_ssbos[i].buffer, ctx.light_ssbos[i].allocation);
     }
     ctx.ubos_initialized = false;
 }
@@ -1143,11 +1697,15 @@ fn destroyUBOs(ctx: *VulkanContext) void {
 // ---- descriptor pool and per-frame sets ----
 
 fn createDescriptorPool(ctx: *VulkanContext) c.VkResult {
-    // Per Pitfall 5 in research: size the pool generously to avoid VK_ERROR_OUT_OF_POOL_MEMORY
-    const pool_sizes = [2]c.VkDescriptorPoolSize{
+    // Size the pool generously to avoid VK_ERROR_OUT_OF_POOL_MEMORY
+    const pool_sizes = [3]c.VkDescriptorPoolSize{
         .{
             .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             .descriptorCount = 16,
+        },
+        .{
+            .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 8,
         },
         .{
             .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -1160,7 +1718,7 @@ fn createDescriptorPool(ctx: *VulkanContext) c.VkResult {
         .pNext = null,
         .flags = 0,
         .maxSets = MAX_FRAMES_IN_FLIGHT + 16,
-        .poolSizeCount = 2,
+        .poolSizeCount = 3,
         .pPoolSizes = &pool_sizes,
     };
 
@@ -1185,7 +1743,7 @@ fn allocatePerFrameDescriptorSets(ctx: *VulkanContext) c.VkResult {
     const result = c.vkAllocateDescriptorSets(ctx.device, &alloc_info, &ctx.descriptor_sets_0);
     if (result != c.VK_SUCCESS) return result;
 
-    // Write camera UBO and light UBO bindings for each frame
+    // Write camera UBO and light SSBO bindings for each frame
     i = 0;
     while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
         const cam_buf_info = c.VkDescriptorBufferInfo{
@@ -1195,9 +1753,9 @@ fn allocatePerFrameDescriptorSets(ctx: *VulkanContext) c.VkResult {
         };
 
         const light_buf_info = c.VkDescriptorBufferInfo{
-            .buffer = ctx.light_ubos[i].buffer,
+            .buffer = ctx.light_ssbos[i].buffer,
             .offset = 0,
-            .range = @sizeOf(LightUBOData),
+            .range = ctx.light_ssbo_size,
         };
 
         const writes = [2]c.VkWriteDescriptorSet{
@@ -1220,7 +1778,7 @@ fn allocatePerFrameDescriptorSets(ctx: *VulkanContext) c.VkResult {
                 .dstBinding = 1,
                 .dstArrayElement = 0,
                 .descriptorCount = 1,
-                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 .pImageInfo = null,
                 .pBufferInfo = &light_buf_info,
                 .pTexelBufferView = null,
@@ -1355,13 +1913,15 @@ fn createGraphicsPipeline(ctx: *VulkanContext) anyerror!void {
         .alphaToOneEnable = c.VK_FALSE,
     };
 
+    // Depth test EQUAL + write disabled — depth prepass already populated the buffer.
+    // Only fragments at the exact prepass depth pass, giving zero overdraw.
     const depth_stencil = c.VkPipelineDepthStencilStateCreateInfo{
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
         .pNext = null,
         .flags = 0,
         .depthTestEnable = c.VK_TRUE,
-        .depthWriteEnable = c.VK_TRUE,
-        .depthCompareOp = c.VK_COMPARE_OP_LESS,
+        .depthWriteEnable = c.VK_FALSE,
+        .depthCompareOp = c.VK_COMPARE_OP_EQUAL,
         .depthBoundsTestEnable = c.VK_FALSE,
         .stencilTestEnable = c.VK_FALSE,
         .front = std.mem.zeroes(c.VkStencilOpState),
@@ -1952,12 +2512,16 @@ fn materialFree(ctx: *VulkanContext, mat: *Material) void {
 
 fn cleanupSwapchain(ctx: *VulkanContext) void {
     // Destroy in reverse creation order:
-    // 1. Framebuffers
+    // 1. Framebuffers (forward + depth prepass)
     var i: u32 = 0;
     while (i < ctx.swapchain_image_count) : (i += 1) {
         if (ctx.framebuffers[i] != null) {
             c.vkDestroyFramebuffer(ctx.device, ctx.framebuffers[i], null);
             ctx.framebuffers[i] = null;
+        }
+        if (ctx.depth_framebuffers[i] != null) {
+            c.vkDestroyFramebuffer(ctx.device, ctx.depth_framebuffers[i], null);
+            ctx.depth_framebuffers[i] = null;
         }
     }
 
@@ -1998,18 +2562,28 @@ fn recreateSwapchain(ctx: *VulkanContext) bool {
     // 1. Recreate swapchain + image views (updates swapchain_format and swapchain_extent)
     if (createSwapchain(ctx) != c.VK_SUCCESS) return false;
 
-    // Handle format change: recreate render pass and pipeline if format changed (rare)
+    // Handle format change: recreate render passes and pipelines if format changed (rare)
     if (ctx.swapchain_format != old_format) {
         if (ctx.render_pass != null) {
             c.vkDestroyRenderPass(ctx.device, ctx.render_pass, null);
             ctx.render_pass = null;
         }
+        if (ctx.depth_render_pass != null) {
+            c.vkDestroyRenderPass(ctx.device, ctx.depth_render_pass, null);
+            ctx.depth_render_pass = null;
+        }
         if (ctx.pipeline != null) {
             c.vkDestroyPipeline(ctx.device, ctx.pipeline, null);
             ctx.pipeline = null;
         }
+        if (ctx.depth_pipeline != null) {
+            c.vkDestroyPipeline(ctx.device, ctx.depth_pipeline, null);
+            ctx.depth_pipeline = null;
+        }
+        if (createDepthRenderPass(ctx) != c.VK_SUCCESS) return false;
         if (createRenderPass(ctx) != c.VK_SUCCESS) return false;
         createGraphicsPipeline(ctx) catch return false;
+        createDepthPipeline(ctx) catch return false;
     }
 
     // 2. Recreate depth resources with MSAA sample count and new extent
@@ -2018,10 +2592,172 @@ fn recreateSwapchain(ctx: *VulkanContext) bool {
     // 3. Recreate MSAA color resources with new extent
     createMsaaColorResources(ctx) catch return false;
 
-    // 4. Recreate framebuffers with 3 attachments
+    // 4. Recreate depth prepass framebuffers
+    if (createDepthFramebuffers(ctx) != c.VK_SUCCESS) return false;
+
+    // 5. Recreate forward framebuffers with 3 attachments
     if (createFramebuffers(ctx) != c.VK_SUCCESS) return false;
 
+    // 6. Rebuild render graph with new extent and framebuffers
+    buildRenderGraph(ctx);
+
     return true;
+}
+
+// ---- depth prepass callback ----
+// Called by the render graph. Renders all geometry depth-only (no color, no materials).
+
+fn depthPrepassCallback(cmd: c.VkCommandBuffer, user_data: ?*anyopaque) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(user_data orelse return));
+    const frame = ctx.current_frame;
+
+    const viewport = c.VkViewport{
+        .x = 0.0,
+        .y = 0.0,
+        .width = @floatFromInt(ctx.swapchain_extent.width),
+        .height = @floatFromInt(ctx.swapchain_extent.height),
+        .minDepth = 0.0,
+        .maxDepth = 1.0,
+    };
+    const scissor = c.VkRect2D{
+        .offset = .{ .x = 0, .y = 0 },
+        .extent = ctx.swapchain_extent,
+    };
+    c.vkCmdSetViewport(cmd, 0, 1, &viewport);
+    c.vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // Bind depth pipeline and camera descriptor set (set 0 only — no materials needed)
+    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.depth_pipeline);
+    c.vkCmdBindDescriptorSets(
+        cmd,
+        c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+        ctx.pipeline_layout,
+        0,
+        1,
+        &ctx.descriptor_sets_0[frame],
+        0,
+        null,
+    );
+
+    // Iterate draw list — vertex/index + model matrix push constant, no material binding
+    var i: u32 = 0;
+    while (i < ctx.draw_count) : (i += 1) {
+        const dc = &ctx.draw_list[i];
+        const offset: u64 = 0;
+        c.vkCmdBindVertexBuffers(cmd, 0, 1, &dc.vertex_buffer, &offset);
+        c.vkCmdBindIndexBuffer(cmd, dc.index_buffer, 0, c.VK_INDEX_TYPE_UINT32);
+        c.vkCmdPushConstants(cmd, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &dc.model_matrix);
+        c.vkCmdDrawIndexed(cmd, dc.index_count, 1, 0, 0, 0);
+    }
+}
+
+// ---- forward pass callback ----
+// Called by the render graph during execute(). Records all queued draw calls.
+
+fn forwardPassCallback(cmd: c.VkCommandBuffer, user_data: ?*anyopaque) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(user_data orelse return));
+    const frame = ctx.current_frame;
+
+    // Dynamic viewport and scissor
+    const viewport = c.VkViewport{
+        .x = 0.0,
+        .y = 0.0,
+        .width = @floatFromInt(ctx.swapchain_extent.width),
+        .height = @floatFromInt(ctx.swapchain_extent.height),
+        .minDepth = 0.0,
+        .maxDepth = 1.0,
+    };
+    const scissor = c.VkRect2D{
+        .offset = .{ .x = 0, .y = 0 },
+        .extent = ctx.swapchain_extent,
+    };
+    c.vkCmdSetViewport(cmd, 0, 1, &viewport);
+    c.vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // Bind forward pipeline and per-frame descriptor set (set 0: camera + lights)
+    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
+    c.vkCmdBindDescriptorSets(
+        cmd,
+        c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+        ctx.pipeline_layout,
+        0,
+        1,
+        &ctx.descriptor_sets_0[frame],
+        0,
+        null,
+    );
+
+    // Execute queued draw calls
+    var i: u32 = 0;
+    while (i < ctx.draw_count) : (i += 1) {
+        const dc = &ctx.draw_list[i];
+
+        // Bind material descriptor set (set 1)
+        c.vkCmdBindDescriptorSets(
+            cmd,
+            c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            ctx.pipeline_layout,
+            1,
+            1,
+            &dc.material_descriptor_set,
+            0,
+            null,
+        );
+
+        const offset: u64 = 0;
+        c.vkCmdBindVertexBuffers(cmd, 0, 1, &dc.vertex_buffer, &offset);
+        c.vkCmdBindIndexBuffer(cmd, dc.index_buffer, 0, c.VK_INDEX_TYPE_UINT32);
+        c.vkCmdPushConstants(cmd, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &dc.model_matrix);
+        c.vkCmdDrawIndexed(cmd, dc.index_count, 1, 0, 0, 0);
+    }
+}
+
+// ---- render graph setup ----
+// Builds the render graph with a single forward pass.
+// Called from Renderer.create and recreateSwapchain.
+
+fn buildRenderGraph(ctx: *VulkanContext) void {
+    ctx.graph.reset();
+
+    // Pass 0: depth prepass — depth-only, populates depth buffer
+    const depth_clear = [1]c.VkClearValue{
+        .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
+    };
+    const depth_pass = ctx.graph.addGraphicsPass(.{
+        .render_pass = ctx.depth_render_pass,
+        .framebuffers = &ctx.depth_framebuffers,
+        .extent = ctx.swapchain_extent,
+        .clear_values = depth_clear[0..],
+        .execute_fn = &depthPrepassCallback,
+        .user_data = null, // set per-frame in endFrame
+    });
+
+    // Barrier: depth writes from prepass must be visible to forward pass depth reads
+    ctx.graph.addImageBarrier(depth_pass, .{
+        .image = ctx.depth_image,
+        .old_layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .new_layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .src_stage = c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        .dst_stage = c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .src_access = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        .dst_access = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+        .aspect_mask = c.VK_IMAGE_ASPECT_DEPTH_BIT,
+    });
+
+    // Pass 1: forward shading — color + depth read (EQUAL test, zero overdraw)
+    const fwd_clear = [3]c.VkClearValue{
+        ctx.clear_color,
+        .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } }, // unused (LOAD)
+        ctx.clear_color, // unused (DONT_CARE)
+    };
+    _ = ctx.graph.addGraphicsPass(.{
+        .render_pass = ctx.render_pass,
+        .framebuffers = &ctx.framebuffers,
+        .extent = ctx.swapchain_extent,
+        .clear_values = fwd_clear[0..],
+        .execute_fn = &forwardPassCallback,
+        .user_data = null, // set per-frame in endFrame
+    });
 }
 
 // ---- bridge: Renderer struct ----
@@ -2083,12 +2819,22 @@ pub const Renderer = struct {
             return VkBridgeError.VulkanFailed;
         };
 
-        // render pass with 3 attachments (requires depth_format + swapchain_format + msaa_samples)
+        // depth prepass render pass (depth-only, requires depth_format + msaa_samples)
+        if (createDepthRenderPass(&ctx) != c.VK_SUCCESS) {
+            return VkBridgeError.VulkanFailed;
+        }
+
+        // forward render pass with 3 attachments (requires depth_format + swapchain_format + msaa_samples)
         if (createRenderPass(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
-        // framebuffers with 3 attachments (requires MSAA color view + depth view + render pass)
+        // depth prepass framebuffers (depth-only, requires depth view + depth render pass)
+        if (createDepthFramebuffers(&ctx) != c.VK_SUCCESS) {
+            return VkBridgeError.VulkanFailed;
+        }
+
+        // forward framebuffers with 3 attachments (requires MSAA color view + depth view + render pass)
         if (createFramebuffers(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
@@ -2116,8 +2862,13 @@ pub const Renderer = struct {
             return VkBridgeError.VulkanFailed;
         }
 
-        // graphics pipeline (requires render pass + descriptor set layouts)
+        // forward graphics pipeline (requires render pass + descriptor set layouts)
         createGraphicsPipeline(&ctx) catch {
+            return VkBridgeError.VulkanFailed;
+        };
+
+        // depth prepass pipeline (requires depth render pass + pipeline layout)
+        createDepthPipeline(&ctx) catch {
             return VkBridgeError.VulkanFailed;
         };
 
@@ -2131,6 +2882,9 @@ pub const Renderer = struct {
             return VkBridgeError.VulkanFailed;
         };
         ctx.default_texture_initialized = true;
+
+        // build render graph (single forward pass for now)
+        buildRenderGraph(&ctx);
 
         return Renderer{ .ctx = ctx };
     }
@@ -2150,6 +2904,7 @@ pub const Renderer = struct {
             if (self.ctx.in_flight_fences[i] != null) c.vkDestroyFence(self.ctx.device, self.ctx.in_flight_fences[i], null);
         }
 
+        if (self.ctx.depth_pipeline != null) c.vkDestroyPipeline(self.ctx.device, self.ctx.depth_pipeline, null);
         if (self.ctx.pipeline != null) c.vkDestroyPipeline(self.ctx.device, self.ctx.pipeline, null);
         if (self.ctx.pipeline_layout != null) c.vkDestroyPipelineLayout(self.ctx.device, self.ctx.pipeline_layout, null);
 
@@ -2164,6 +2919,7 @@ pub const Renderer = struct {
         cleanupSwapchain(&self.ctx);
 
         if (self.ctx.render_pass != null) c.vkDestroyRenderPass(self.ctx.device, self.ctx.render_pass, null);
+        if (self.ctx.depth_render_pass != null) c.vkDestroyRenderPass(self.ctx.device, self.ctx.depth_render_pass, null);
 
         if (self.ctx.vma_initialized) {
             self.ctx.vma_ctx.destroy();
@@ -2181,8 +2937,8 @@ pub const Renderer = struct {
         const ctx = &self.ctx;
         const frame = ctx.current_frame;
 
-        // Flush pending light state to this frame's UBO before rendering
-        @memcpy(ctx.light_mapped[frame][0..@sizeOf(LightUBOData)], std.mem.asBytes(&ctx.pending_lights));
+        // Pack and flush pending light state to this frame's SSBO
+        flushLightSSBO(ctx, frame);
 
         // wait for previous frame using this slot to finish
         _ = c.vkWaitForFences(ctx.device, 1, &ctx.in_flight_fences[frame], c.VK_TRUE, std.math.maxInt(u64));
@@ -2217,56 +2973,10 @@ pub const Renderer = struct {
         };
         _ = c.vkBeginCommandBuffer(ctx.command_buffers[frame], &begin_info);
 
-        // Three clear values matching render pass attachments:
-        // [0] MSAA color, [1] MSAA depth, [2] resolve (DONT_CARE load op — value unused)
-        const clear_values = [3]c.VkClearValue{
-            ctx.clear_color,
-            .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
-            ctx.clear_color, // unused (resolve has DONT_CARE load op)
-        };
-
-        ctx.graph.execute(
-            ctx.command_buffers[frame],
-            ctx.render_pass,
-            ctx.framebuffers[image_index],
-            ctx.swapchain_extent,
-            clear_values[0..],
-        );
-
-        // Set active command buffer for draw calls
+        // Store image index for endFrame and reset draw list
+        ctx.graph_image_index = image_index;
+        ctx.draw_count = 0;
         ctx.active_cmd = ctx.command_buffers[frame];
-
-        // Set dynamic viewport and scissor
-        const viewport = c.VkViewport{
-            .x = 0.0,
-            .y = 0.0,
-            .width = @floatFromInt(ctx.swapchain_extent.width),
-            .height = @floatFromInt(ctx.swapchain_extent.height),
-            .minDepth = 0.0,
-            .maxDepth = 1.0,
-        };
-        const scissor = c.VkRect2D{
-            .offset = .{ .x = 0, .y = 0 },
-            .extent = ctx.swapchain_extent,
-        };
-        c.vkCmdSetViewport(ctx.active_cmd, 0, 1, &viewport);
-        c.vkCmdSetScissor(ctx.active_cmd, 0, 1, &scissor);
-
-        // Bind pipeline and per-frame descriptor set
-        c.vkCmdBindPipeline(ctx.active_cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
-        c.vkCmdBindDescriptorSets(
-            ctx.active_cmd,
-            c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            ctx.pipeline_layout,
-            0, // set 0
-            1,
-            &ctx.descriptor_sets_0[frame],
-            0,
-            null,
-        );
-
-        // store image index for endFrame
-        ctx.graph.current_image_index = image_index;
 
         return true;
     }
@@ -2274,12 +2984,15 @@ pub const Renderer = struct {
     pub fn endFrame(self: *Renderer) void {
         const ctx = &self.ctx;
         const frame = ctx.current_frame;
-        const image_index = ctx.graph.current_image_index;
+        const image_index = ctx.graph_image_index;
 
-        // end the render pass opened by beginFrame → graph.execute
-        c.vkCmdEndRenderPass(ctx.command_buffers[frame]);
+        // Set stable context pointer for all pass callbacks and execute
+        ctx.graph.setPassUserData(0, @ptrCast(ctx));
+        ctx.graph.setPassUserData(1, @ptrCast(ctx));
+        ctx.graph.execute(ctx.command_buffers[frame], image_index);
 
         ctx.active_cmd = null;
+        ctx.draw_count = 0;
 
         _ = c.vkEndCommandBuffer(ctx.command_buffers[frame]);
 
@@ -2323,6 +3036,13 @@ pub const Renderer = struct {
 
     pub fn setClearColor(self: *Renderer, r: f32, g: f32, b: f32, a: f32) void {
         self.ctx.clear_color = .{ .color = .{ .float32 = [4]f32{ r, g, b, a } } };
+        // Update the forward pass (pass 1) clear values in the render graph
+        const clear_values = [3]c.VkClearValue{
+            self.ctx.clear_color,
+            .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
+            self.ctx.clear_color,
+        };
+        self.ctx.graph.updatePassClearValues(1, clear_values[0..]);
     }
 
     // setCamera — bridge-callable signature: Ptr(u8) maps to *const anyopaque in Zig.
@@ -2342,33 +3062,19 @@ pub const Renderer = struct {
         @memcpy(self.ctx.camera_mapped[frame][0..@sizeOf(CameraUBO)], std.mem.asBytes(&ubo));
     }
 
-    // draw — bridge-callable: draws a Mesh with a Material and model matrix.
-    // mesh: const &Mesh (read-only borrow of the Mesh bridge struct)
-    // material: const &Material (read-only borrow — descriptor set bound as Set 1)
-    // model_matrix: Ptr(u8) = pointer to 16 f32 values (column-major mat4, push constant)
+    // draw — bridge-callable: queues a Mesh for rendering with the given Material and model matrix.
+    // Draw calls are collected into a list and executed by the render graph's forward pass.
     pub fn draw(self: *Renderer, mesh: *const Mesh, material: *const Material, model_matrix: *const anyopaque) void {
-        const cmd = self.ctx.active_cmd;
-        if (cmd == null) return;
-
-        // Bind material descriptor set (Set 1: MaterialUBO + texture sampler)
-        c.vkCmdBindDescriptorSets(
-            cmd,
-            c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            self.ctx.pipeline_layout,
-            1, // set 1
-            1,
-            &material.descriptor_set,
-            0,
-            null,
-        );
-
+        if (self.ctx.draw_count >= MAX_DRAW_CALLS) return;
         const model_mat: *const [16]f32 = @ptrCast(@alignCast(model_matrix));
-        const offset: u64 = 0;
-        const vb = mesh.mesh_buffers.vertex_buffer;
-        c.vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
-        c.vkCmdBindIndexBuffer(cmd, mesh.mesh_buffers.index_buffer, 0, c.VK_INDEX_TYPE_UINT32);
-        c.vkCmdPushConstants(cmd, self.ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, 64, model_mat);
-        c.vkCmdDrawIndexed(cmd, mesh.mesh_buffers.index_count, 1, 0, 0, 0);
+        self.ctx.draw_list[self.ctx.draw_count] = DrawCall{
+            .vertex_buffer = mesh.mesh_buffers.vertex_buffer,
+            .index_buffer = mesh.mesh_buffers.index_buffer,
+            .index_count = mesh.mesh_buffers.index_count,
+            .material_descriptor_set = material.descriptor_set,
+            .model_matrix = model_mat.*,
+        };
+        self.ctx.draw_count += 1;
     }
 
     // createMesh: bridge func — allocates GPU vertex + index buffers via VMA.
@@ -2439,18 +3145,17 @@ pub const Renderer = struct {
     }
 
     // setDirLight: sets a directional light at the given index (0..3).
-    // The light data is accumulated and written to the UBO at the next beginFrame call.
     // dir_x/y/z: normalized direction the light travels (points from light source toward scene)
     // r/g/b: light color (1.0, 1.0, 1.0 = white)
     pub fn setDirLight(self: *Renderer, index: u32, dir_x: f32, dir_y: f32, dir_z: f32, r: f32, g: f32, b: f32) void {
-        if (index >= 4) return;
-        self.ctx.pending_lights.dir_lights[index] = DirLightData{
-            .direction = [4]f32{ dir_x, dir_y, dir_z, 0.0 },
+        if (index >= MAX_DIR_LIGHTS) return;
+        self.ctx.pending_dir_lights[index] = LightData{
+            .direction_type = [4]f32{ dir_x, dir_y, dir_z, LIGHT_TYPE_DIRECTIONAL },
             .color = [4]f32{ r, g, b, 0.0 },
         };
     }
 
-    // setPointLight: sets a point light at the given index (0..7).
+    // setPointLight: sets a point light at the given index (0..125).
     // pos_x/y/z: world-space position
     // r/g/b: light color
     // constant/linear/quadratic: attenuation factors (e.g. 1.0, 0.09, 0.032 for ~50 unit range)
@@ -2467,25 +3172,53 @@ pub const Renderer = struct {
         linear: f32,
         quadratic: f32,
     ) void {
-        if (index >= 8) return;
-        self.ctx.pending_lights.point_lights[index] = PointLightData{
-            .position = [4]f32{ pos_x, pos_y, pos_z, 0.0 },
+        if (index >= MAX_POINT_LIGHTS) return;
+        self.ctx.pending_point_lights[index] = LightData{
+            .position_range = [4]f32{ pos_x, pos_y, pos_z, 0.0 },
+            .direction_type = [4]f32{ 0.0, 0.0, 0.0, LIGHT_TYPE_POINT },
             .color = [4]f32{ r, g, b, 0.0 },
-            .constant = constant,
-            .linear = linear,
-            .quadratic = quadratic,
+            .attenuation = [4]f32{ constant, linear, quadratic, 0.0 },
         };
     }
 
-    // setLightCounts: sets how many directional and point lights are active.
-    // Must be called after setDirLight/setPointLight to activate the lights in the shader.
-    pub fn setLightCounts(self: *Renderer, num_dir: u32, num_point: u32) void {
-        self.ctx.pending_lights.num_dir_lights = @intCast(@min(num_dir, 4));
-        self.ctx.pending_lights.num_point_lights = @intCast(@min(num_point, 8));
+    // setSpotLight: sets a spot light at the given index (0..125).
+    // pos_x/y/z: world-space position
+    // dir_x/y/z: direction the spot light points
+    // r/g/b: light color
+    // inner_angle/outer_angle: cone angles in radians (cosines stored internally)
+    // range: maximum light range (used for attenuation and cluster culling)
+    pub fn setSpotLight(
+        self: *Renderer,
+        index: u32,
+        pos_x: f32,
+        pos_y: f32,
+        pos_z: f32,
+        dir_x: f32,
+        dir_y: f32,
+        dir_z: f32,
+        r: f32,
+        g: f32,
+        b: f32,
+        inner_angle: f32,
+        outer_angle: f32,
+        range: f32,
+    ) void {
+        if (index >= MAX_SPOT_LIGHTS) return;
+        self.ctx.pending_spot_lights[index] = LightData{
+            .position_range = [4]f32{ pos_x, pos_y, pos_z, range },
+            .direction_type = [4]f32{ dir_x, dir_y, dir_z, LIGHT_TYPE_SPOT },
+            .color = [4]f32{ r, g, b, 0.0 },
+            .attenuation = [4]f32{ 1.0, 0.09, 0.032, 0.0 },
+            .spot_params = [4]f32{ @cos(inner_angle), @cos(outer_angle), 0.0, 0.0 },
+        };
+    }
 
-        // Write updated light data to the current frame's UBO immediately
-        const frame = self.ctx.current_frame;
-        @memcpy(self.ctx.light_mapped[frame][0..@sizeOf(LightUBOData)], std.mem.asBytes(&self.ctx.pending_lights));
+    // setLightCounts: sets how many directional, point, and spot lights are active.
+    // Must be called after setting lights to activate them.
+    pub fn setLightCounts(self: *Renderer, num_dir: u32, num_point: u32, num_spot: u32) void {
+        self.ctx.num_dir_lights = @min(num_dir, MAX_DIR_LIGHTS);
+        self.ctx.num_point_lights = @min(num_point, MAX_POINT_LIGHTS);
+        self.ctx.num_spot_lights = @min(num_spot, MAX_SPOT_LIGHTS);
     }
 };
 

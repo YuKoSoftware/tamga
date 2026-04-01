@@ -4,7 +4,7 @@ module tamga_vk3d
 #version = Version(0, 1, 6)
 #build   = static
 #cimport = { name: "vulkan", include: "vulkan/vulkan.h" }
-#cimport = { name: "stb_image", include: "stb_image.h", source: "../../src/TamgaVK3D/stb_image_impl.c" }
+#cimport = { name: "stb_image", include: "stb_image.h", source: "../../src/TamgaVK/TamgaVK3D/stb_image_impl.c" }
 
 import tamga_sdl3
 import tamga_vulkan
@@ -95,15 +95,23 @@ pub bridge struct Renderer {
     // Call setLightCounts after setting lights to activate them.
     bridge func setDirLight(self: mut& Renderer, index: u32, dir_x: f32, dir_y: f32, dir_z: f32, r: f32, g: f32, b: f32) void
 
-    // setPointLight configures a point light at the given index (0..7).
+    // setPointLight configures a point light at the given index (0..125).
     // pos_x/y/z: world-space position of the light
     // r/g/b: light color
     // constant/linear/quadratic: attenuation factors (e.g. 1.0, 0.09, 0.032 for ~50 unit range)
     // Call setLightCounts after setting lights to activate them.
     bridge func setPointLight(self: mut& Renderer, index: u32, pos_x: f32, pos_y: f32, pos_z: f32, r: f32, g: f32, b: f32, constant: f32, linear: f32, quadratic: f32) void
 
-    // setLightCounts activates the given number of directional and point lights.
-    // Must be called after configuring lights via setDirLight/setPointLight.
-    // Writes the pending light data to the per-frame UBO.
-    bridge func setLightCounts(self: mut& Renderer, num_dir: u32, num_point: u32) void
+    // setSpotLight configures a spot light at the given index (0..125).
+    // pos_x/y/z: world-space position
+    // dir_x/y/z: direction the spot light points
+    // r/g/b: light color
+    // inner_angle/outer_angle: cone angles in radians
+    // range: maximum light range
+    // Call setLightCounts after setting lights to activate them.
+    bridge func setSpotLight(self: mut& Renderer, index: u32, pos_x: f32, pos_y: f32, pos_z: f32, dir_x: f32, dir_y: f32, dir_z: f32, r: f32, g: f32, b: f32, inner_angle: f32, outer_angle: f32, range: f32) void
+
+    // setLightCounts activates the given number of directional, point, and spot lights.
+    // Must be called after configuring lights via setDirLight/setPointLight/setSpotLight.
+    bridge func setLightCounts(self: mut& Renderer, num_dir: u32, num_point: u32, num_spot: u32) void
 }

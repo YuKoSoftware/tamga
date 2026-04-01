@@ -81,11 +81,13 @@ pub func run_vulkan_test() void {
 
     console.println("Material created: ok")
 
-    // Set up one directional light (key light from upper-left front).
+    // Set up one directional light (key light from upper-left front)
+    // and one spot light (warm accent from the right).
     ren.setDirLight(0, -0.5, -1.0, -0.3, 1.0, 1.0, 0.9)
-    ren.setLightCounts(1, 0)
+    ren.setSpotLight(0, 2.0, 1.0, 2.0, -1.0, -0.5, -1.0, 1.0, 0.8, 0.4, 0.3, 0.5, 10.0)
+    ren.setLightCounts(1, 0, 1)
 
-    console.println("Directional light configured")
+    console.println("Directional + spot light configured")
 
     // Create a triangle mesh via the renderer.
     const meshResult = ren.createMesh(getTriangleVertices(), 144, getTriangleIndices(), 3)
