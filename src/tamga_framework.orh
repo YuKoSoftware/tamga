@@ -1,4 +1,4 @@
-module main
+module tamga_framework
 
 #name    = "tamga_test"
 #version = Version(0, 1, 5)
@@ -7,7 +7,7 @@ module main
 // ---- Mesh and matrix helper bridge functions ----
 // These provide raw float arrays for test_vulkan.orh — vertex/index data and
 // matrices that cannot be expressed as raw byte array literals in Orhon.
-// Implemented in main.zig (the module's Zig sidecar).
+// Implemented in tamga_framework.zig (the module's Zig sidecar).
 
 bridge func getTriangleVertices() Ptr(u8)
 bridge func getTriangleIndices() Ptr(u8)

@@ -185,26 +185,26 @@ pub struct QuitEvent {
 
 bridge struct RawEvent {
     bridge func create() RawEvent
-    bridge func poll(self: &RawEvent) bool
-    bridge func getTag(self: const &RawEvent) u8
-    bridge func getKeyScancode(self: const &RawEvent) u32
-    bridge func getKeyRepeat(self: const &RawEvent) bool
-    bridge func getMouseX(self: const &RawEvent) f32
-    bridge func getMouseY(self: const &RawEvent) f32
-    bridge func getMouseXRel(self: const &RawEvent) f32
-    bridge func getMouseYRel(self: const &RawEvent) f32
-    bridge func getMouseButton(self: const &RawEvent) u8
-    bridge func getMouseDown(self: const &RawEvent) bool
-    bridge func getGamepadWhich(self: const &RawEvent) u32
-    bridge func getGamepadAxis(self: const &RawEvent) u8
-    bridge func getGamepadAxisValue(self: const &RawEvent) i16
-    bridge func getGamepadButton(self: const &RawEvent) u8
-    bridge func getText(self: const &RawEvent) String
-    bridge func getWindowW(self: const &RawEvent) i32
-    bridge func getWindowH(self: const &RawEvent) i32
-    bridge func getPixelW(self: const &RawEvent) i32
-    bridge func getPixelH(self: const &RawEvent) i32
-    bridge func getTimestamp(self: const &RawEvent) u64
+    bridge func poll(self: mut& RawEvent) bool
+    bridge func getTag(self: const& RawEvent) u8
+    bridge func getKeyScancode(self: const& RawEvent) u32
+    bridge func getKeyRepeat(self: const& RawEvent) bool
+    bridge func getMouseX(self: const& RawEvent) f32
+    bridge func getMouseY(self: const& RawEvent) f32
+    bridge func getMouseXRel(self: const& RawEvent) f32
+    bridge func getMouseYRel(self: const& RawEvent) f32
+    bridge func getMouseButton(self: const& RawEvent) u8
+    bridge func getMouseDown(self: const& RawEvent) bool
+    bridge func getGamepadWhich(self: const& RawEvent) u32
+    bridge func getGamepadAxis(self: const& RawEvent) u8
+    bridge func getGamepadAxisValue(self: const& RawEvent) i16
+    bridge func getGamepadButton(self: const& RawEvent) u8
+    bridge func getText(self: const& RawEvent) String
+    bridge func getWindowW(self: const& RawEvent) i32
+    bridge func getWindowH(self: const& RawEvent) i32
+    bridge func getPixelW(self: const& RawEvent) i32
+    bridge func getPixelH(self: const& RawEvent) i32
+    bridge func getTimestamp(self: const& RawEvent) u64
 }
 
 // ---- TAG constants (internal — match tamga_sdl3.zig TAG_* values) ----
@@ -238,14 +238,14 @@ const TAG_WINDOW_CLOSE:         u8 = 15
 //       }
 //   }
 
-pub const Event: type = (null | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent)
+pub const Event: type = NullUnion((QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent))
 
 // ---- pollEvent ----
 // Polls for the next SDL3 event.
 // Returns null when the event queue is empty.
 // Use `is` dispatch on the result to determine the event type.
 
-pub func pollEvent() (null | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent) {
+pub func pollEvent() NullUnion((QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent)) {
     var raw = RawEvent.create()
     if(!raw.poll()) { return null }
     const tag = raw.getTag()
@@ -255,19 +255,19 @@ pub func pollEvent() (null | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotion
         return QuitEvent(timestamp: ts)
     }
     if(tag == TAG_KEY_DOWN) {
-        return KeyDownEvent(scancode: cast(Scancode, raw.getKeyScancode()), repeat: raw.getKeyRepeat(), timestamp: ts)
+        return KeyDownEvent(scancode: @cast(Scancode, raw.getKeyScancode()), repeat: raw.getKeyRepeat(), timestamp: ts)
     }
     if(tag == TAG_KEY_UP) {
-        return KeyUpEvent(scancode: cast(Scancode, raw.getKeyScancode()), repeat: raw.getKeyRepeat(), timestamp: ts)
+        return KeyUpEvent(scancode: @cast(Scancode, raw.getKeyScancode()), repeat: raw.getKeyRepeat(), timestamp: ts)
     }
     if(tag == TAG_MOUSE_MOTION) {
         return MouseMotionEvent(x: raw.getMouseX(), y: raw.getMouseY(), xrel: raw.getMouseXRel(), yrel: raw.getMouseYRel(), timestamp: ts)
     }
     if(tag == TAG_MOUSE_BUTTON_DOWN) {
-        return MouseButtonEvent(button: cast(MouseButton, raw.getMouseButton()), down: true, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
+        return MouseButtonEvent(button: @cast(MouseButton, raw.getMouseButton()), down: true, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
     }
     if(tag == TAG_MOUSE_BUTTON_UP) {
-        return MouseButtonEvent(button: cast(MouseButton, raw.getMouseButton()), down: false, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
+        return MouseButtonEvent(button: @cast(MouseButton, raw.getMouseButton()), down: false, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
     }
     if(tag == TAG_GAMEPAD_AXIS) {
         return GamepadAxisEvent(gamepad_id: raw.getGamepadWhich(), axis: raw.getGamepadAxis(), value: raw.getGamepadAxisValue(), timestamp: ts)
@@ -315,24 +315,24 @@ pub bridge func getLastScancode() u32
 // ---- Window bridge struct ----
 
 pub bridge struct Window {
-    bridge func create(title: String, w: i32, h: i32, flags: u64) (Error | Window)
-    bridge func destroy(self: &Window) void
-    bridge func setTitle(self: &Window, title: String) void
-    bridge func getWidth(self: const &Window) i32
-    bridge func getHeight(self: const &Window) i32
-    bridge func getPixelWidth(self: const &Window) i32
-    bridge func getPixelHeight(self: const &Window) i32
-    bridge func getDisplayScale(self: const &Window) f32
-    bridge func getHandle(self: const &Window) WindowHandle
-    bridge func setRelativeMouseMode(self: &Window, enabled: bool) bool
-    bridge func startTextInput(self: &Window) void
-    bridge func stopTextInput(self: &Window) void
+    bridge func create(title: String, w: i32, h: i32, flags: u64) ErrorUnion(Window)
+    bridge func destroy(self: mut& Window) void
+    bridge func setTitle(self: mut& Window, title: String) void
+    bridge func getWidth(self: const& Window) i32
+    bridge func getHeight(self: const& Window) i32
+    bridge func getPixelWidth(self: const& Window) i32
+    bridge func getPixelHeight(self: const& Window) i32
+    bridge func getDisplayScale(self: const& Window) f32
+    bridge func getHandle(self: const& Window) WindowHandle
+    bridge func setRelativeMouseMode(self: mut& Window, enabled: bool) bool
+    bridge func startTextInput(self: mut& Window) void
+    bridge func stopTextInput(self: mut& Window) void
 }
 
 // ---- Lifecycle ----
-// initPlatform returns (Error | void) — callers handle initialization failure via error union.
+// initPlatform returns ErrorUnion(void) — callers handle initialization failure via error union.
 
-pub bridge func initPlatform() (Error | void)
+pub bridge func initPlatform() ErrorUnion(void)
 pub bridge func quitPlatform() void
 pub bridge func getError() String
 

@@ -66,7 +66,7 @@ audio, and GUI. Also serves as a primary stress test for the Orhon compiler.
 
 - Window/input (SDL3 bridge) — **done** (tamga_sdl3)
 - Vulkan 3D renderer — **done** (tamga_vk3d: textures, materials, Phong lighting)
-- VMA GPU memory allocator — **done** (tamga_vulkan)
+- VMA GPU memory allocator — **done** (tamga_vk, formerly tamga_vulkan)
 - Game loop — **done** (tamga_sdl3: fixed-timestep with variable render)
 - Standalone 2D renderer (Vulkan, performance-optimized)
 - Audio (WAV + OGG via SDL3 core + stb_vorbis)
@@ -105,7 +105,8 @@ Output goes to `bin/`. Cache lives in `.orh-cache/` and `zig-cache/` — both in
 
 ## Project Structure
 
-Every project is rooted at `src/main.orh` with `module main`. Source files live in `src/`
+Every project is rooted at `src/main.orh` with `module main` (note: a breaking change to
+rename `module main` to `module <project_name>` is in design stage). Source files live in `src/`
 at any depth — directory layout is purely organizational; the compiler groups files by their
 `module` declaration, not their path.
 
@@ -126,8 +127,20 @@ No circular imports. Everything is private by default; `pub` exposes symbols.
 All C/system interop goes through Zig. Each bridged module has a `.zig` sidecar
 alongside its anchor `.orh` file.
 
-**Bridge safety:** mutable `&T` cannot cross the bridge in either direction
-(except `self: &BridgeStruct` on methods). Use `const &T` for read borrows or pass by value.
+**Bridge safety:** mutable `mut& T` cannot cross the bridge in either direction
+(except `self: mut& BridgeStruct` on methods). Use `const& T` for read borrows or pass by value.
+
+## Syntax Notes (Current Compiler)
+
+- References: `self: mut& T` (mutable), `self: const& T` (read-only) — no bare `&T`
+- Error unions: `ErrorUnion(T)` not `(Error | T)`; null unions: `NullUnion(T)` not `(null | T)`
+- Multi-type nullable: `NullUnion((A | B | C))`
+- Compiler intrinsics use `@` prefix: `@cast(T, x)`, `@copy`, `@move`, `@swap`, `@assert`, `@size`, `@align`, `@typename`, `@typeid`
+- Module naming: primary exe module must match project folder name (no `module main`)
+- Address-of: `mut& x` not `&x`
+- Collections require `use std::collections`
+
+When compiler docs are stale, update them in `/home/yunus/Projects/orhon/orhon_compiler/docs/`.
 
 ## Conventions
 

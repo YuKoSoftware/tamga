@@ -43,11 +43,11 @@ pub struct Player {
         return Player(name: n, health: 100.0)
     }
 
-    pub func is_alive(self: const &Player) bool {
+    pub func is_alive(self: const& Player) bool {
         return self.health > 0.0
     }
 
-    pub func take_damage(self: &Player, amount: f32) void {
+    pub func take_damage(self: mut& Player, amount: f32) void {
         self.health = self.health - amount
     }
 }
@@ -134,7 +134,7 @@ pub struct Pair(A: type, B: type) {
 pub struct Box(T: type) {
     pub value: T
 
-    pub func get(self: const &Box) T {
+    pub func get(self: const& Box) T {
         return self.value
     }
 }

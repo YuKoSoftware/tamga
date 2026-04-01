@@ -44,7 +44,7 @@ pub struct Loop {
     // Create a Loop with the given configuration.
     // Converts fixed_hz to nanoseconds per step for integer arithmetic.
     pub func create(config: LoopConfig) Loop {
-        const step_ns = cast(u64, 1000000000.0 / config.fixed_hz)
+        const step_ns = @cast(u64, 1000000000.0 / config.fixed_hz)
         return Loop(
             config:        config,
             running:       false,
@@ -56,7 +56,7 @@ pub struct Loop {
 
     // Run the frame loop until stop() is called or a quit/window-close event is received.
     // Blocks until the loop exits.
-    pub func run(self: &Loop) void {
+    pub func run(self: mut& Loop) void {
         self.running  = true
         self.last_time    = getTicksNS()
         self.accumulator  = 0
@@ -76,7 +76,7 @@ pub struct Loop {
             // Poll and dispatch all queued events
             while(true) {
                 const ev = pollEvent()
-                if(ev == null) { break }
+                if(ev is null) { break }
 
                 // Auto-quit on platform-level quit or window close
                 if(ev is QuitEvent) {
@@ -91,25 +91,25 @@ pub struct Loop {
             }
 
             // Fixed-timestep update drain
-            const dt_seconds = cast(f64, self.fixed_step_ns) / 1000000000.0
+            const dt_seconds = @cast(f64, self.fixed_step_ns) / 1000000000.0
             while(self.accumulator >= self.fixed_step_ns) {
                 self.config.on_update(dt_seconds)
                 self.accumulator = self.accumulator - self.fixed_step_ns
             }
 
             // Variable render — alpha is interpolation factor in [0, 1)
-            const alpha = cast(f64, self.accumulator) / cast(f64, self.fixed_step_ns)
+            const alpha = @cast(f64, self.accumulator) / @cast(f64, self.fixed_step_ns)
             self.config.on_render(alpha)
         }
     }
 
     // Request the loop to stop. The current frame completes before exit.
-    pub func stop(self: &Loop) void {
+    pub func stop(self: mut& Loop) void {
         self.running = false
     }
 
     // Reset loop state. Call after run() returns to allow re-use.
-    pub func destroy(self: &Loop) void {
+    pub func destroy(self: mut& Loop) void {
         self.running     = false
         self.accumulator = 0
         self.last_time   = 0

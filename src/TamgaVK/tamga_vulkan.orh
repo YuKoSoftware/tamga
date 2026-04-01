@@ -3,7 +3,7 @@ module tamga_vulkan
 #name    = "tamga_vulkan"
 #version = Version(0, 1, 2)
 #build   = static
-#cimport = { name: "vulkan", include: "vulkan/vulkan.h", source: "../../src/TamgaVulkan/vma_impl.cpp" }
+#cimport = { name: "vulkan", include: "vulkan/vulkan.h", source: "../../src/TamgaVK/vma_impl.cpp" }
 
 // ---- BufferAlloc ----
 // Returned by Allocator.createBuffer. Both fields are opaque pointers.
@@ -36,9 +36,9 @@ pub struct StagingRegion {
 //   alloc.destroyBuffer(buf.buffer, buf.allocation)
 
 pub bridge struct Allocator {
-    bridge func create(instance: Ptr(u8), physical_device: Ptr(u8), device: Ptr(u8)) (Error | Allocator)
-    bridge func destroy(self: &Allocator) void
-    bridge func createBuffer(self: &Allocator, size: u64, usage: u32, gpu_only: bool) (Error | BufferAlloc)
-    bridge func destroyBuffer(self: &Allocator, buffer: Ptr(u8), allocation: Ptr(u8)) void
-    bridge func stagingWrite(self: &Allocator, data: Ptr(u8), size: u32) (Error | StagingRegion)
+    bridge func create(instance: Ptr(u8), physical_device: Ptr(u8), device: Ptr(u8)) ErrorUnion(Allocator)
+    bridge func destroy(self: mut& Allocator) void
+    bridge func createBuffer(self: mut& Allocator, size: u64, usage: u32, gpu_only: bool) ErrorUnion(BufferAlloc)
+    bridge func destroyBuffer(self: mut& Allocator, buffer: Ptr(u8), allocation: Ptr(u8)) void
+    bridge func stagingWrite(self: mut& Allocator, data: Ptr(u8), size: u32) ErrorUnion(StagingRegion)
 }

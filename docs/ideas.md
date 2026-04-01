@@ -1,12 +1,6 @@
 # Language Ideas
 
-- ~~Should we have a separate folder for compiled dynamic libraries?~~ — BLOCKED. Splitting exe (`bin/`) and lib (`lib/`) breaks runtime discovery — the exe can't find the `.so` without an rpath. Needs rpath support in the compiler first. Keeping everything in `bin/` for now.
-
-- When a dynamic lib gets compiled, it gets an interface file — should the interface be tagged as `interface` instead of `module`?
-
 - Union spreading: let a union be composed from other unions. e.g. `pub const GuiEvent: type = (...InputEvent | ButtonClickEvent | ScrollEvent)` where InputEvent is itself a union. Flattens at compile time. Useful for building event hierarchies across modules without repeating every type. Syntax TBD (spread operator `...`, or a keyword like `expand`).
-
-- ~~Allow comma-separated libraries in `#cimport name:` field~~ — DONE (v0.10.23). `#cimport = { name: "vulkan, SDL3", include: "..." }` splits on comma + trims. Single string keeps the parser simple.
 
 - Bridge struct value-pass semantics: bridge structs that contain only GPU handles (VkImage, VkBuffer, etc. — opaque integer handles) are safe to pass by value even to "destroy" functions. The Vulkan spec makes handles opaque integers, not owning pointers. Consider documenting that bridge structs with only handle fields can be pass-by-value in the bridge without ownership risk. May be worth a lint rule: "bridge struct with only Ptr/opaque fields — value semantics safe."
 

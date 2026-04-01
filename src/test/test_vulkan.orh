@@ -1,4 +1,4 @@
-module main
+module tamga_framework
 
 import tamga_sdl3
 import tamga_vk3d

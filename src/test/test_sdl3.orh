@@ -1,4 +1,4 @@
-module main
+module tamga_framework
 
 import tamga_sdl3
 import std::console
@@ -47,30 +47,32 @@ pub func run_sdl3_test() void {
 
     while(running) {
         const ev = tamga_sdl3.pollEvent()
-        if(ev != null) {
+        if(ev is null) {
+            tamga_sdl3.delayNS(16000000)
+            continue
+        }
 
-            // WIN-03: Quit event
-            if(ev is tamga_sdl3.QuitEvent) {
+        // WIN-03: Quit event
+        if(ev is tamga_sdl3.QuitEvent) {
+            running = false
+        }
+
+        // WIN-03: Window close event
+        if(ev is tamga_sdl3.WindowCloseEvent) {
+            running = false
+        }
+
+        // WIN-04: Keyboard with typed enum scancode field
+        if(ev is tamga_sdl3.KeyDownEvent) {
+            const kd = ev.value
+            if(kd.scancode == tamga_sdl3.Scancode.Escape) {
                 running = false
             }
+        }
 
-            // WIN-03: Window close event
-            if(ev is tamga_sdl3.WindowCloseEvent) {
-                running = false
-            }
-
-            // WIN-04: Keyboard with typed enum scancode field
-            if(ev is tamga_sdl3.KeyDownEvent) {
-                const kd = ev.value
-                if(kd.scancode == tamga_sdl3.Scancode.Escape) {
-                    running = false
-                }
-            }
-
-            // WIN-05: Mouse motion (typed payload)
-            if(ev is tamga_sdl3.MouseMotionEvent) {
-                const mm = ev.value
-            }
+        // WIN-05: Mouse motion (typed payload)
+        if(ev is tamga_sdl3.MouseMotionEvent) {
+            const mm = ev.value
         }
 
         tamga_sdl3.delayNS(16000000)
