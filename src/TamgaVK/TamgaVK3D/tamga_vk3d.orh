@@ -1,0 +1,117 @@
+module tamga_vk3d
+
+#name    = "tamga_vk3d"
+#version = Version(0, 1, 6)
+#build   = static
+#cimport = { name: "vulkan", include: "vulkan/vulkan.h" }
+#cimport = { name: "stb_image", include: "stb_image.h", source: "../../src/TamgaVK/TamgaVK3D/stb_image_impl.c" }
+
+import tamga_sdl3
+import tamga_vulkan
+
+// ---- Mesh ----
+// GPU vertex + index buffer pair, allocated via VMA.
+// Vertices use the standard D-05 format: position (vec3) + normal (vec3) + uv (vec2) + color (vec4)
+// = 48 bytes per vertex. Indices are u32.
+//
+// Mesh objects are created and destroyed via Renderer methods (see below),
+// since buffer allocation requires access to the renderer's VMA allocator.
+
+pub bridge struct Mesh {
+    // (No standalone constructor — use Renderer.createMesh and Renderer.destroyMesh)
+    // Mesh is a bridge struct so its identity (pointer to MeshBuffers) can be passed
+    // to Renderer.draw as const& Mesh.
+}
+
+// ---- Texture ----
+// GPU image + view + sampler loaded from a PNG/JPG file via stb_image.
+// Created via Renderer.loadTexture, destroyed via Renderer.destroyTexture.
+
+pub bridge struct Texture {
+    // (No standalone constructor — use Renderer.loadTexture and Renderer.destroyTexture)
+}
+
+// ---- Material ----
+// Phong material: diffuse color, specular intensity, shininess, and a texture.
+// Created via Renderer.createMaterial, destroyed via Renderer.destroyMaterial.
+// Bound to descriptor set 1 during draw calls.
+
+pub bridge struct Material {
+    // (No standalone constructor — use Renderer.createMaterial and Renderer.destroyMaterial)
+}
+
+// ---- Renderer ----
+// Vulkan renderer: manages swapchain, render pass, depth buffer, pipeline, and per-frame resources.
+
+pub bridge struct Renderer {
+    bridge func create(window_handle: tamga_sdl3.WindowHandle, debug_mode: bool) ErrorUnion(Renderer)
+    bridge func destroy(self: mut& Renderer) void
+    bridge func beginFrame(self: mut& Renderer) bool
+    bridge func endFrame(self: mut& Renderer) void
+    bridge func setClearColor(self: mut& Renderer, r: f32, g: f32, b: f32, a: f32) void
+
+    // createMesh allocates vertex and index buffers on the GPU via the renderer's VMA allocator.
+    // vertices: raw byte pointer to packed vertex data (stride = 48 bytes, D-05 format)
+    // vertex_byte_size: total byte size of vertex array (numVertices * 48)
+    // indices: raw byte pointer to u32 index array
+    // index_count: number of indices
+    bridge func createMesh(self: mut& Renderer, vertices: Ptr(u8), vertex_byte_size: u32, indices: Ptr(u8), index_count: u32) ErrorUnion(Mesh)
+
+    // destroyMesh releases the vertex and index buffer allocations.
+    bridge func destroyMesh(self: mut& Renderer, mesh: const& Mesh) void
+
+    // setCamera updates the per-frame camera UBO.
+    // view: pointer to column-major 4x4 float view matrix (16 floats)
+    // proj: pointer to column-major 4x4 float projection matrix (16 floats)
+    // view_pos: pointer to 3-float camera world position
+    bridge func setCamera(self: mut& Renderer, view: Ptr(u8), proj: Ptr(u8), view_pos: Ptr(u8)) void
+
+    // draw submits a mesh for rendering with the given material and model matrix.
+    // mesh: the mesh to draw
+    // material: const read borrow — descriptor set 1 bound before the draw call
+    // model_matrix: pointer to column-major 4x4 float model matrix (16 floats, push constant)
+    bridge func draw(self: mut& Renderer, mesh: const& Mesh, material: const& Material, model_matrix: Ptr(u8)) void
+
+    // loadTexture loads a PNG/JPG texture from disk and returns a Texture object.
+    // path: null-terminated path to the image file (relative to working directory).
+    bridge func loadTexture(self: mut& Renderer, path: String) ErrorUnion(Texture)
+
+    // destroyTexture releases a previously loaded texture.
+    bridge func destroyTexture(self: mut& Renderer, tex: const& Texture) void
+
+    // createMaterial creates a Phong material with the given properties and texture.
+    // diffuse_r/g/b/a: RGBA diffuse color multiplier (1.0 = unmodified texture color)
+    // specular: specular intensity (0.0 = none, 1.0 = full)
+    // shininess: Phong shininess exponent (e.g. 32.0 = moderately shiny)
+    // texture: const ref (compiler auto-borrows structs to const& for bridge calls)
+    bridge func createMaterial(self: mut& Renderer, diffuse_r: f32, diffuse_g: f32, diffuse_b: f32, diffuse_a: f32, specular: f32, shininess: f32, texture: const& Texture) ErrorUnion(Material)
+
+    // destroyMaterial releases a previously created material.
+    bridge func destroyMaterial(self: mut& Renderer, mat: const& Material) void
+
+    // setDirLight configures a directional light at the given index (0..3).
+    // dir_x/y/z: direction vector the light travels (should be normalized)
+    // r/g/b: light color (1.0, 1.0, 1.0 = white)
+    // Call setLightCounts after setting lights to activate them.
+    bridge func setDirLight(self: mut& Renderer, index: u32, dir_x: f32, dir_y: f32, dir_z: f32, r: f32, g: f32, b: f32) void
+
+    // setPointLight configures a point light at the given index (0..125).
+    // pos_x/y/z: world-space position of the light
+    // r/g/b: light color
+    // constant/linear/quadratic: attenuation factors (e.g. 1.0, 0.09, 0.032 for ~50 unit range)
+    // Call setLightCounts after setting lights to activate them.
+    bridge func setPointLight(self: mut& Renderer, index: u32, pos_x: f32, pos_y: f32, pos_z: f32, r: f32, g: f32, b: f32, constant: f32, linear: f32, quadratic: f32) void
+
+    // setSpotLight configures a spot light at the given index (0..125).
+    // pos_x/y/z: world-space position
+    // dir_x/y/z: direction the spot light points
+    // r/g/b: light color
+    // inner_angle/outer_angle: cone angles in radians
+    // range: maximum light range
+    // Call setLightCounts after setting lights to activate them.
+    bridge func setSpotLight(self: mut& Renderer, index: u32, pos_x: f32, pos_y: f32, pos_z: f32, dir_x: f32, dir_y: f32, dir_z: f32, r: f32, g: f32, b: f32, inner_angle: f32, outer_angle: f32, range: f32) void
+
+    // setLightCounts activates the given number of directional, point, and spot lights.
+    // Must be called after configuring lights via setDirLight/setPointLight/setSpotLight.
+    bridge func setLightCounts(self: mut& Renderer, num_dir: u32, num_point: u32, num_spot: u32) void
+}

@@ -1,0 +1,117 @@
+module tamga_sdl3
+
+import std::console
+
+// ---- LoopConfig ----
+// User-supplied callbacks for the frame loop. All fields are required.
+//
+// fixed_hz:   Target update frequency in Hz (e.g. 60.0 for 60 updates/second)
+// on_event:   Called once per queued event — receives a typed Event struct
+// on_update:  Called at fixed_hz rate — receives delta time in seconds (f64)
+// on_render:  Called once per frame — receives interpolation alpha in [0,1) (f64)
+//
+pub struct LoopConfig {
+    pub fixed_hz:  f64
+    pub on_event:  func(Event) void
+    pub on_update: func(f64) void
+    pub on_render: func(f64) void
+}
+
+// Re-export Event type alias for callers
+pub const LoopEvent: type = Event
+
+// ---- Loop ----
+// Fixed-timestep game loop with variable render.
+//
+// Algorithm (per RESEARCH.md Pattern 3 — "Fix Your Timestep"):
+//   - Accumulate real elapsed time each frame
+//   - Drain accumulator in fixed_step_ns chunks, calling on_update each time
+//   - Call on_render once with interpolation alpha = accumulator / fixed_step_ns
+//   - Clamp frame_time to 250ms to prevent spiral of death
+//
+// Usage:
+//   var loop = Loop.create(LoopConfig(fixed_hz: 60.0, on_event: my_event, on_update: my_update, on_render: my_render))
+//   loop.run()
+//   loop.destroy()
+
+pub struct Loop {
+    config:         LoopConfig
+    running:        bool
+    accumulator:    u64
+    last_time:      u64
+    fixed_step_ns:  u64
+
+    // Create a Loop with the given configuration.
+    // Converts fixed_hz to nanoseconds per step for integer arithmetic.
+    pub func create(config: LoopConfig) Loop {
+        const step_ns = @cast(u64, 1000000000.0 / config.fixed_hz)
+        return Loop(
+            config:        config,
+            running:       false,
+            accumulator:   0,
+            last_time:     0,
+            fixed_step_ns: step_ns
+        )
+    }
+
+    // Run the frame loop until stop() is called or a quit/window-close event is received.
+    // Blocks until the loop exits.
+    pub func run(self: mut& Loop) void {
+        self.running  = true
+        self.last_time    = getTicksNS()
+        self.accumulator  = 0
+
+        while(self.running) {
+            const now = getTicksNS()
+            var frame_time = now - self.last_time
+
+            // Clamp to 250ms — prevents spiral of death when frame takes too long
+            if(frame_time > 250000000) {
+                frame_time = 250000000
+            }
+
+            self.last_time    = now
+            self.accumulator  = self.accumulator + frame_time
+
+            // Poll and dispatch all queued events
+            while(true) {
+                const ev = pollEvent()
+                if(ev is null) { break }
+
+                // Auto-quit on platform-level quit or window close
+                if(ev is QuitEvent) {
+                    self.running = false
+                }
+                if(ev is WindowCloseEvent) {
+                    self.running = false
+                }
+
+                // Forward event to user callback
+                self.config.on_event(ev)
+            }
+
+            // Fixed-timestep update drain
+            const dt_seconds = @cast(f64, self.fixed_step_ns) / 1000000000.0
+            while(self.accumulator >= self.fixed_step_ns) {
+                self.config.on_update(dt_seconds)
+                self.accumulator = self.accumulator - self.fixed_step_ns
+            }
+
+            // Variable render — alpha is interpolation factor in [0, 1)
+            const alpha = @cast(f64, self.accumulator) / @cast(f64, self.fixed_step_ns)
+            self.config.on_render(alpha)
+        }
+    }
+
+    // Request the loop to stop. The current frame completes before exit.
+    pub func stop(self: mut& Loop) void {
+        self.running = false
+    }
+
+    // Reset loop state. Call after run() returns to allow re-use.
+    pub func destroy(self: mut& Loop) void {
+        self.running     = false
+        self.accumulator = 0
+        self.last_time   = 0
+    }
+}

@@ -1,0 +1,134 @@
+module tamga_framework
+
+import tamga_sdl3
+import tamga_vk3d
+import std::console
+
+// Vulkan renderer integration test — Plan 02-04.
+//
+// Tests texture mapping, material system, and Phong lighting:
+// - stb_image texture loading
+// - Material descriptor set (diffuse color, specular, shininess, texture sampler)
+// - Directional light UBO
+// - Updated draw() with material parameter
+//
+// Vertex format (D-05): vec3 pos + vec3 normal + vec2 uv + vec4 color = 48 bytes per vertex.
+// vertex_byte_size = 3 vertices * 48 bytes = 144 bytes.
+// Matrix/vertex helper functions are bridge functions declared in main.orh,
+// implemented in main.zig — they return pointers to static float arrays.
+// This pattern avoids the need for raw array literals in Orhon.
+//
+// NOTE: defer is not used for tex/mat cleanup — explicit cleanup at each exit
+//       point ensures correct ordering when multiple resources depend on each other.
+
+pub func run_vulkan_test() void {
+    console.println("--- Vulkan Renderer Test (Texture + Material + Lighting) ---")
+
+    // D-12, WIN-10: Error union dispatch
+    const initResult = tamga_sdl3.initPlatform()
+    if(initResult is Error) {
+        console.println("Platform init failed:")
+        console.println(tamga_sdl3.getError())
+        return
+    }
+    defer { tamga_sdl3.quitPlatform() }
+
+    console.println("SDL3 init: ok")
+
+    // WIN-01: Window with Vulkan flag (0x10000000 = SDL_WINDOW_VULKAN in SDL3)
+    const winResult = tamga_sdl3.Window.create("Vulkan Texture+Lighting Test", 800, 600, 268435456)
+    if(winResult is Error) {
+        console.println("Window creation failed:")
+        console.println(tamga_sdl3.getError())
+        return
+    }
+    var win = winResult.value
+    defer { win.destroy() }
+
+    console.println("Window created with Vulkan flag")
+
+    // WIN-13, D-08: Pass WindowHandle directly — no raw Ptr(u8) leakage
+    const renResult = tamga_vk3d.Renderer.create(win.getHandle(), true)
+    if(renResult is Error) {
+        console.println("Vulkan renderer creation failed")
+        return
+    }
+    var ren = renResult.value
+    defer { ren.destroy() }
+
+    console.println("Vulkan renderer: ok")
+
+    ren.setClearColor(0.1, 0.1, 0.15, 1.0)
+
+    // Load a 2x2 checkerboard test texture (PNG, red/green/blue/white)
+    const texResult = ren.loadTexture("assets/textures/test_texture.png")
+    if(texResult is Error) {
+        console.println("Texture load failed")
+        return
+    }
+    const tex = texResult.value
+
+    console.println("Texture loaded: ok")
+
+    // Create a material: warm diffuse tint, moderate specular, texture bound
+    const matResult = ren.createMaterial(1.0, 0.8, 0.6, 1.0, 0.5, 32.0, tex)
+    if(matResult is Error) {
+        console.println("Material creation failed")
+        ren.destroyTexture(tex)
+        return
+    }
+    const mat = matResult.value
+
+    console.println("Material created: ok")
+
+    // Set up one directional light (key light from upper-left front)
+    // and one spot light (warm accent from the right).
+    ren.setDirLight(0, -0.5, -1.0, -0.3, 1.0, 1.0, 0.9)
+    ren.setSpotLight(0, 2.0, 1.0, 2.0, -1.0, -0.5, -1.0, 1.0, 0.8, 0.4, 0.3, 0.5, 10.0)
+    ren.setLightCounts(1, 0, 1)
+
+    console.println("Directional + spot light configured")
+
+    // Create a triangle mesh via the renderer.
+    const meshResult = ren.createMesh(getTriangleVertices(), 144, getTriangleIndices(), 3)
+    if(meshResult is Error) {
+        console.println("Mesh creation failed")
+        ren.destroyMaterial(mat)
+        ren.destroyTexture(tex)
+        return
+    }
+    const mesh = meshResult.value
+
+    console.println("Triangle mesh created")
+    console.println("Window open — press ESC or close to quit")
+
+    var running: bool = true
+
+    while(running) {
+        // Drain all pending events before rendering
+        var tag = tamga_sdl3.pollEventTag()
+        while(tag != 0) {
+            if(tag == 1) { running = false }
+            if(tag == 2) { running = false }
+            if(tag == 3) {
+                if(tamga_sdl3.getLastScancode() == 41) { // 41 = SDL_SCANCODE_ESCAPE
+                    running = false
+                }
+            }
+            tag = tamga_sdl3.pollEventTag()
+        }
+
+        if(ren.beginFrame()) {
+            ren.setCamera(getViewMatrix(), getProjMatrix(), getCameraPos())
+            ren.draw(mesh, mat, getIdentityMatrix())
+            ren.endFrame()
+        }
+
+        tamga_sdl3.delayNS(16000000)
+    }
+
+    ren.destroyMesh(mesh)
+    ren.destroyMaterial(mat)
+    ren.destroyTexture(tex)
+    console.println("Test complete.")
+}

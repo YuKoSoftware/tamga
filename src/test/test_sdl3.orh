@@ -1,0 +1,82 @@
+module tamga_framework
+
+import tamga_sdl3
+import std::console
+
+pub func run_sdl3_test() void {
+    console.println("--- SDL3 Platform Test (Typed API) ---")
+
+    // D-12, WIN-10: Error union dispatch — NOT boolean check
+    const initResult = tamga_sdl3.initPlatform()
+    if(initResult is Error) {
+        console.println("Platform init failed:")
+        console.println(tamga_sdl3.getError())
+        return
+    }
+    defer { tamga_sdl3.quitPlatform() }
+
+    console.println("Platform init: ok")
+
+    // WIN-01: Create window with flags
+    const winResult = tamga_sdl3.Window.create("Platform Test", 800, 600, 0)
+    if(winResult is Error) {
+        console.println("Window creation failed:")
+        console.println(tamga_sdl3.getError())
+        return
+    }
+    var win = winResult.value
+    defer { win.destroy() }
+
+    // WIN-13: Get opaque WindowHandle (D-07, D-08)
+    const handle = win.getHandle()
+    console.println("WindowHandle obtained: ok")
+
+    // WIN-09: HiDPI pixel dimensions
+    const pw = win.getPixelWidth()
+    const ph = win.getPixelHeight()
+    console.println("Pixel dims: ok")
+
+    // WIN-14: Display info
+    const displayCount = tamga_sdl3.getDisplayCount()
+    console.println("Display count: ok")
+
+    console.println("Window open — press ESC or close to quit")
+
+    // WIN-03, WIN-04, WIN-05: Typed event dispatch with `is` operator
+    var running: bool = true
+
+    while(running) {
+        const ev = tamga_sdl3.pollEvent()
+        if(ev is null) {
+            tamga_sdl3.delayNS(16000000)
+            continue
+        }
+
+        // WIN-03: Quit event
+        if(ev is tamga_sdl3.QuitEvent) {
+            running = false
+        }
+
+        // WIN-03: Window close event
+        if(ev is tamga_sdl3.WindowCloseEvent) {
+            running = false
+        }
+
+        // WIN-04: Keyboard with typed enum scancode field
+        if(ev is tamga_sdl3.KeyDownEvent) {
+            const kd = ev.value
+            if(kd.scancode == tamga_sdl3.Scancode.Escape) {
+                running = false
+            }
+        }
+
+        // WIN-05: Mouse motion (typed payload)
+        if(ev is tamga_sdl3.MouseMotionEvent) {
+            const mm = ev.value
+        }
+
+        tamga_sdl3.delayNS(16000000)
+    }
+
+    console.println("Test complete.")
+}

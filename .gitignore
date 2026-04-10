@@ -1,0 +1,19 @@
+# Build output
+bin/
+zig-out/
+
+# Caches
+.orh-cache/
+zig-cache/
+.zig-cache/
+
+# Local docs (not tracked)
+*.txt
+
+# Licensed/third-party assets (not tracked)
+assets/models/sponza/
+
+# Tooling
+.planning/
+.claude/
+.obsidian/
