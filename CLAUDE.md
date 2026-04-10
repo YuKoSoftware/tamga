@@ -4,7 +4,7 @@
 
 Tamga is a multimedia/gaming framework library collection for the Orhon programming language.
 Dual purpose: stress-test the Orhon compiler with real-world code, and build a high-quality
-modern framework. Built with Orhon (`.orh`) and Zig bridge sidecars (`.zig`). Builds via
+modern framework. Built with Orhon (`.orh`) and Zig modules (`.zig` + `.zon`). Builds via
 `orhon build`.
 
 ---
@@ -62,6 +62,9 @@ No automated test suite (tests are visual/GPU-dependent).
 - No hacks, no workarounds — if something can't be done cleanly, flag it and discuss
 - Never add features, abstractions, or "improvements" beyond what was requested
 - Large files are a smell — flag when files grow beyond manageable size
+- **Log every compiler shortcoming** — when the Orhon compiler or language can't express
+  something cleanly, log it in `docs/compiler-gaps.md` with what was attempted, what blocked
+  it, and what the clean solution would be. These feed into orhon_compiler work.
 
 ---
 
@@ -114,6 +117,7 @@ docs/
   todo.md                    — Current work and tasks
   ideas.md                   — Language and framework ideas
   bugs.md                    — Compiler bugs found via tamga
+  compiler-gaps.md           — Compiler shortcomings that need fixing
 ```
 
 ---
