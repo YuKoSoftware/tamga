@@ -1,15 +1,36 @@
 # Tamga Framework — Current Work
 
-## Project Update (Post-Setup)
+## Complete Update (Design Phase)
 
-Code and docs are outdated against the current Orhon compiler. Full update needed:
-- Audit all `.orh` files against current compiler syntax and semantics
-- Audit all `.zig` sidecar files against current compiler bridge conventions
-- Update `docs/tech-stack.md` to reflect Vulkan 1.3 only (remove 1.2 references)
-- Update `docs/ideas.md` — remove items that have been implemented or are no longer relevant
-- Update `docs/bugs.md` — verify against current compiler version
-- Verify `orhon build` succeeds with current compiler
-- Run each test file manually and fix breakage
+Design spec: `docs/superpowers/specs/2026-04-10-complete-update-design.md`
+Compiler gaps: `docs/compiler-gaps.md`
+
+### Design completed (Sections 1-4)
+- [x] Section 1: New module system migration (bridge/cimport → zon + auto-mapper)
+- [x] Section 2: tamga_vk3d.zig split into 6 focused modules
+- [x] Section 3: Handle/ID architecture for GPU resources
+- [x] Section 4: Cross-module type passing — **BLOCKED on GAP-001**
+
+### Design remaining (Sections 5-9, blocked)
+- [ ] Section 5: SDL3 module modernization
+- [ ] Section 6: Vulkan module modernization
+- [ ] Section 7: Test file updates
+- [ ] Section 8: Docs cleanup plan
+- [ ] Section 9: Build verification strategy
+
+### Unblocked work (can proceed now)
+- [ ] Create `.zon` files for C dependencies
+- [ ] Strip Chunk 4 incomplete code from tamga_vk3d.zig
+- [ ] Split tamga_vk3d.zig into 6 modules (internal refactor)
+- [ ] Modernize tamga_sdl3 (self-contained, no cross-module deps)
+- [ ] Verify tamga_loop.orh syntax against current compiler
+- [ ] Full docs cleanup (tech-stack, ideas, bugs, stale specs)
+
+### Blocked until GAP-001 is fixed in orhon_compiler
+- [ ] tamga_vk3d public API (Renderer.create needs Window)
+- [ ] tamga_vulkan public API (Allocator.create needs Vulkan handles)
+- [ ] Test files (need cross-module type passing)
+- [ ] Final build verification
 
 ## Clustered Forward Renderer (Wave 4)
 
