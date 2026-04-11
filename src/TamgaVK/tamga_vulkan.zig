@@ -133,32 +133,32 @@ const VmaError = error{VmaFailed};
 
 // ---- Buffer allocation result ----
 
-pub const BufferAlloc = extern struct {
-    buffer: c.VkBuffer,
-    allocation: VmaAllocation,
+pub const BufferAlloc = struct {
+    buffer: *anyopaque,
+    allocation: *anyopaque,
 };
 
 // ---- Image allocation result ----
 
-pub const ImageAlloc = extern struct {
-    image: c.VkImage,
-    allocation: VmaAllocation,
+pub const ImageAlloc = struct {
+    image: *anyopaque,
+    allocation: *anyopaque,
 };
 
 // ---- Staging region ----
 // Describes a region in the ring buffer after a stagingWrite call.
 
-pub const StagingRegion = extern struct {
-    buffer: c.VkBuffer,
+pub const StagingRegion = struct {
+    buffer: *anyopaque,
     offset: u32,
     size: u32,
 };
 
-// ---- VmaContext ----
+// ---- Allocator ----
 // Holds the VMA allocator handle, the 16MB ring buffer staging area,
 // and associated state.
 
-pub const VmaContext = struct {
+pub const Allocator = struct {
     allocator: VmaAllocator,
 
     // 16MB ring buffer staging area, persistently mapped
@@ -171,7 +171,11 @@ pub const VmaContext = struct {
     // Fences guarding ring buffer regions (one per frame in flight)
     staging_fences: [MAX_FRAMES_IN_FLIGHT]c.VkFence = [_]c.VkFence{null} ** MAX_FRAMES_IN_FLIGHT,
 
-    pub fn create(instance: c.VkInstance, physical_device: c.VkPhysicalDevice, device: c.VkDevice) anyerror!VmaContext {
+    pub fn create(instance: *anyopaque, physical_device: *anyopaque, device: *anyopaque) anyerror!Allocator {
+        const vk_instance: c.VkInstance = @ptrCast(instance);
+        const vk_phys: c.VkPhysicalDevice = @ptrCast(physical_device);
+        const vk_device: c.VkDevice = @ptrCast(device);
+
         // VMA requires dynamic function loading — provide vkGetInstanceProcAddr and
         // vkGetDeviceProcAddr so it can resolve everything else at runtime.
         const vk_fns = VmaVulkanFunctions{
@@ -181,9 +185,9 @@ pub const VmaContext = struct {
 
         const allocator_info = VmaAllocatorCreateInfo{
             .flags = 0,
-            .physicalDevice = physical_device,
-            .device = device,
-            .instance = instance,
+            .physicalDevice = vk_phys,
+            .device = vk_device,
+            .instance = vk_instance,
             .vulkanApiVersion = (@as(u32, 1) << 22) | (@as(u32, 0) << 12) | 0, // Vulkan 1.0
             .pVulkanFunctions = &vk_fns,
         };
@@ -240,7 +244,7 @@ pub const VmaContext = struct {
             return VmaError.VmaFailed;
         };
 
-        return VmaContext{
+        return Allocator{
             .allocator = allocator,
             .staging_buffer = staging_buffer,
             .staging_allocation = staging_allocation,
@@ -250,7 +254,7 @@ pub const VmaContext = struct {
         };
     }
 
-    pub fn destroy(self: *VmaContext) void {
+    pub fn destroy(self: *Allocator) void {
         vmaDestroyBuffer(self.allocator, self.staging_buffer, self.staging_allocation);
         vmaDestroyAllocator(self.allocator);
     }
@@ -258,7 +262,7 @@ pub const VmaContext = struct {
     // createBuffer creates a GPU buffer with VMA suballocation.
     // gpu_only = true: VMA_MEMORY_USAGE_AUTO with GPU_ONLY preference (device-local, no CPU access)
     // gpu_only = false: VMA_MEMORY_USAGE_AUTO with HOST_ACCESS preference (e.g. UBOs, readback)
-    pub fn createBuffer(self: *VmaContext, size: u64, usage: u32, gpu_only: bool) anyerror!BufferAlloc {
+    pub fn createBuffer(self: *Allocator, size: u64, usage: u32, gpu_only: bool) anyerror!BufferAlloc {
         const buf_info = c.VkBufferCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .pNext = null,
@@ -283,19 +287,21 @@ pub const VmaContext = struct {
         if (result != c.VK_SUCCESS) return VmaError.VmaFailed;
 
         return BufferAlloc{
-            .buffer = buffer,
+            .buffer = @ptrCast(buffer),
             .allocation = allocation_raw,
         };
     }
 
-    pub fn destroyBuffer(self: *VmaContext, buffer: c.VkBuffer, allocation: VmaAllocation) void {
-        vmaDestroyBuffer(self.allocator, buffer, allocation);
+    pub fn destroyBuffer(self: *Allocator, buffer: *anyopaque, allocation: *anyopaque) void {
+        const vk_buffer: c.VkBuffer = @ptrCast(buffer);
+        const vma_alloc: VmaAllocation = @ptrCast(allocation);
+        vmaDestroyBuffer(self.allocator, vk_buffer, vma_alloc);
     }
 
     // mapBuffer maps a host-accessible buffer into CPU address space.
     // Only valid for buffers created with gpu_only = false.
     // Returns a byte pointer to the mapped memory or null on failure.
-    pub fn mapBuffer(self: *VmaContext, allocation: VmaAllocation) ?[*]u8 {
+    pub fn mapBuffer(self: *Allocator, allocation: VmaAllocation) ?[*]u8 {
         var mapped_raw: ?*anyopaque = null;
         const result = vmaMapMemory(self.allocator, allocation, &mapped_raw);
         if (result != c.VK_SUCCESS) return null;
@@ -303,7 +309,7 @@ pub const VmaContext = struct {
     }
 
     // unmapBuffer unmaps a previously mapped buffer allocation.
-    pub fn unmapBuffer(self: *VmaContext, allocation: VmaAllocation) void {
+    pub fn unmapBuffer(self: *Allocator, allocation: VmaAllocation) void {
         vmaUnmapMemory(self.allocator, allocation);
     }
 
@@ -317,7 +323,7 @@ pub const VmaContext = struct {
     //
     // If data is larger than the entire staging buffer (rare — large mesh upload),
     // a one-shot allocation is used and a debug warning is printed.
-    pub fn stagingWrite(self: *VmaContext, data: [*]const u8, size: u32) anyerror!StagingRegion {
+    pub fn stagingWrite(self: *Allocator, data: [*]const u8, size: u32) anyerror!StagingRegion {
         // One-shot fallback for data larger than the ring buffer
         if (size > self.staging_size) {
             std.debug.print("[TamgaVMA] Warning: stagingWrite size {} exceeds ring buffer {}. Using one-shot allocation.\n", .{ size, self.staging_size });
@@ -327,15 +333,17 @@ pub const VmaContext = struct {
                 false,
             );
             // Map, write, unmap for one-shot
+            const one_shot_vk_buf: c.VkBuffer = @ptrCast(alloc.buffer);
+            const one_shot_vma_alloc: VmaAllocation = @ptrCast(alloc.allocation);
             var mapped_raw: ?*anyopaque = null;
-            const map_result = vmaMapMemory(self.allocator, alloc.allocation, &mapped_raw);
+            const map_result = vmaMapMemory(self.allocator, one_shot_vma_alloc, &mapped_raw);
             if (map_result != c.VK_SUCCESS) {
-                vmaDestroyBuffer(self.allocator, alloc.buffer, alloc.allocation);
+                vmaDestroyBuffer(self.allocator, one_shot_vk_buf, one_shot_vma_alloc);
                 return VmaError.VmaFailed;
             }
             const dest: [*]u8 = @ptrCast(mapped_raw.?);
             @memcpy(dest[0..size], data[0..size]);
-            vmaUnmapMemory(self.allocator, alloc.allocation);
+            vmaUnmapMemory(self.allocator, one_shot_vma_alloc);
             return StagingRegion{
                 .buffer = alloc.buffer,
                 .offset = 0,
@@ -364,7 +372,7 @@ pub const VmaContext = struct {
         }
 
         return StagingRegion{
-            .buffer = self.staging_buffer,
+            .buffer = @ptrCast(self.staging_buffer),
             .offset = write_offset,
             .size = size,
         };
@@ -373,7 +381,7 @@ pub const VmaContext = struct {
     // createImage creates a GPU image with VMA suballocation.
     // gpu_only images are device-local (optimal for sampling).
     pub fn createImage(
-        self: *VmaContext,
+        self: *Allocator,
         width: u32,
         height: u32,
         format: c.VkFormat,
@@ -386,7 +394,7 @@ pub const VmaContext = struct {
     // createImageWithSamples creates a GPU image with a specified MSAA sample count.
     // Use this for MSAA color and depth attachments.
     pub fn createImageWithSamples(
-        self: *VmaContext,
+        self: *Allocator,
         width: u32,
         height: u32,
         format: c.VkFormat,
@@ -424,77 +432,17 @@ pub const VmaContext = struct {
         if (result != c.VK_SUCCESS) return VmaError.VmaFailed;
 
         return ImageAlloc{
-            .image = image,
+            .image = @ptrCast(image),
             .allocation = allocation_raw,
         };
     }
 
-    pub fn destroyImage(self: *VmaContext, image: c.VkImage, allocation: VmaAllocation) void {
-        vmaDestroyImage(self.allocator, image, allocation);
+    pub fn destroyImage(self: *Allocator, image: *anyopaque, allocation: *anyopaque) void {
+        const vk_image: c.VkImage = @ptrCast(image);
+        const vma_alloc: VmaAllocation = @ptrCast(allocation);
+        vmaDestroyImage(self.allocator, vk_image, vma_alloc);
     }
 };
-
-// ---- Bridge-exported functions ----
-// These are the functions the Orhon bridge calls. The bridge passes Vulkan handles
-// as *anyopaque (Ptr(u8) on the Orhon side) — cast to the appropriate Vulkan types here.
-
-pub export fn vma_create(
-    instance: *anyopaque,
-    physical_device: *anyopaque,
-    device: *anyopaque,
-    out_ctx: **VmaContext,
-) c.VkResult {
-    const vk_instance: c.VkInstance = @ptrCast(instance);
-    const vk_phys: c.VkPhysicalDevice = @ptrCast(physical_device);
-    const vk_device: c.VkDevice = @ptrCast(device);
-
-    const ctx = std.heap.page_allocator.create(VmaContext) catch return c.VK_ERROR_OUT_OF_HOST_MEMORY;
-    ctx.* = VmaContext.create(vk_instance, vk_phys, vk_device) catch {
-        std.heap.page_allocator.destroy(ctx);
-        return c.VK_ERROR_INITIALIZATION_FAILED;
-    };
-    out_ctx.* = ctx;
-    return c.VK_SUCCESS;
-}
-
-pub export fn vma_destroy(ctx: *VmaContext) void {
-    ctx.destroy();
-    std.heap.page_allocator.destroy(ctx);
-}
-
-pub export fn vma_create_buffer(
-    ctx: *VmaContext,
-    size: u64,
-    usage: u32,
-    gpu_only: bool,
-    out_buffer: *?*anyopaque,
-    out_allocation: *?*anyopaque,
-) c.VkResult {
-    const result = ctx.createBuffer(size, usage, gpu_only) catch return c.VK_ERROR_INITIALIZATION_FAILED;
-    out_buffer.* = @ptrCast(result.buffer);
-    out_allocation.* = @ptrCast(result.allocation);
-    return c.VK_SUCCESS;
-}
-
-pub export fn vma_destroy_buffer(ctx: *VmaContext, buffer: *anyopaque, allocation: *anyopaque) void {
-    const vk_buffer: c.VkBuffer = @ptrCast(buffer);
-    const vma_alloc: VmaAllocation = @ptrCast(allocation);
-    ctx.destroyBuffer(vk_buffer, vma_alloc);
-}
-
-pub export fn vma_staging_write(
-    ctx: *VmaContext,
-    data: *const anyopaque,
-    size: u32,
-    out_buffer: *?*anyopaque,
-    out_offset: *u32,
-) c.VkResult {
-    const data_ptr: [*]const u8 = @ptrCast(data);
-    const region = ctx.stagingWrite(data_ptr, size) catch return c.VK_ERROR_INITIALIZATION_FAILED;
-    out_buffer.* = @ptrCast(region.buffer);
-    out_offset.* = region.offset;
-    return c.VK_SUCCESS;
-}
 
 // ---- Render Graph ----
 //
