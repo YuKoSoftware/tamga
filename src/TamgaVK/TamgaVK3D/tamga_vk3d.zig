@@ -7,123 +7,31 @@ const sdl = @cImport({
     @cInclude("SDL3/SDL.h");
     @cInclude("SDL3/SDL_vulkan.h");
 });
-// stb_image: single-header C library for PNG/JPG/BMP texture loading.
-// Implementation is compiled via stb_image_impl.c (added as a C source via #cimport source:).
-// Using extern declarations avoids the @cImport path-resolution issue in the generated bridge:
-// the bridge file lives in .orh-cache/generated/ and cannot resolve relative "libs/stb_image.h".
-const stbi = struct {
-    pub extern fn stbi_load(filename: [*:0]const u8, x: *c_int, y: *c_int, comp: *c_int, req_comp: c_int) ?[*]u8;
-    pub extern fn stbi_image_free(retval_from_stbi_load: ?[*]u8) void;
-    pub extern fn stbi_failure_reason() [*:0]const u8;
-};
+
+// ---- private modules ----
+const lighting = @import("_vk3d_lighting.zig");
+const descriptors = @import("_vk3d_descriptors.zig");
+const pipeline = @import("_vk3d_pipeline.zig");
+const resources = @import("_vk3d_resources.zig");
+const rendergraph = @import("_vk3d_rendergraph.zig");
+
+// ---- re-export public types from private modules ----
+pub const LightData = lighting.LightData;
+pub const CameraUBO = descriptors.CameraUBO;
+pub const MaterialUBOData = descriptors.MaterialUBOData;
+pub const MeshBuffers = resources.MeshBuffers;
+pub const Texture = resources.Texture;
+pub const Material = resources.Material;
 
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 
-// ---- draw call list ----
-//
-// draw() collects draw calls into a list. The render graph's forward pass
-// callback iterates this list to record Vulkan commands. This allows the
-// graph to control pass begin/end and insert barriers between passes.
-
-const MAX_DRAW_CALLS: u32 = 256;
-
-const DrawCall = struct {
-    vertex_buffer: c.VkBuffer,
-    index_buffer: c.VkBuffer,
-    index_count: u32,
-    material_descriptor_set: c.VkDescriptorSet,
-    model_matrix: [16]f32,
-};
-
 // ---- error types for bridge ----
 
-const VkBridgeError = error{VulkanFailed};
-
-// ---- CameraUBO (std140 layout, 144 bytes) ----
-// view: 64 bytes, proj: 64 bytes, view_pos: 12 bytes, _pad: 4 bytes
-
-pub const CameraUBO = extern struct {
-    view: [16]f32,
-    proj: [16]f32,
-    view_pos: [3]f32,
-    _pad: f32 = 0.0,
-};
-
-// ---- Light data (std430 layout, matches mesh.frag.glsl LightSSBO) ----
-// Unified light struct: type field distinguishes directional/point/spot.
-// 80 bytes per light (5 x vec4).
-
-const MAX_LIGHTS: u32 = 256;
-const MAX_DIR_LIGHTS: u32 = 4;
-const MAX_POINT_LIGHTS: u32 = 126;
-const MAX_SPOT_LIGHTS: u32 = 126;
-
-const LIGHT_TYPE_DIRECTIONAL: f32 = 0.0;
-const LIGHT_TYPE_POINT: f32 = 1.0;
-const LIGHT_TYPE_SPOT: f32 = 2.0;
-
-pub const LightData = extern struct {
-    position_range: [4]f32 = [_]f32{0.0} ** 4, // xyz = position, w = range
-    direction_type: [4]f32 = [_]f32{0.0} ** 4, // xyz = direction, w = type (0/1/2)
-    color: [4]f32 = [_]f32{0.0} ** 4, // rgb = color, w unused
-    attenuation: [4]f32 = [4]f32{ 1.0, 0.0, 0.0, 0.0 }, // constant, linear, quadratic, unused
-    spot_params: [4]f32 = [_]f32{0.0} ** 4, // cos(inner), cos(outer), unused, unused
-};
-
-// SSBO header (16 bytes, matches shader layout)
-const LightSSBOHeader = extern struct {
-    num_lights: i32 = 0,
-    _pad: [3]i32 = [_]i32{0} ** 3,
-};
-
-// ---- MaterialUBOData (std140 layout, matches mesh.frag.glsl exactly) ----
-// diffuseColor vec4 (16) + specular f32 (4) + shininess f32 (4) + pad (8) = 32 bytes
-
-pub const MaterialUBOData = extern struct {
-    diffuse_color: [4]f32 = [4]f32{ 1.0, 1.0, 1.0, 1.0 },
-    specular: f32 = 0.5,
-    shininess: f32 = 32.0,
-    _pad: [2]f32 = [_]f32{0.0} ** 2,
-};
-
-// ---- MeshBuffers ----
-// GPU vertex + index buffers for a mesh, allocated via VMA.
-
-pub const MeshBuffers = struct {
-    vertex_buffer: c.VkBuffer,
-    vertex_allocation: vma.VmaAllocation,
-    index_buffer: c.VkBuffer,
-    index_allocation: vma.VmaAllocation,
-    index_count: u32,
-};
-
-// ---- Texture ----
-// GPU image + view + sampler, loaded from a file via stb_image.
-// Created via Renderer.createTexture, destroyed via Renderer.destroyTexture.
-
-pub const Texture = struct {
-    image: c.VkImage,
-    view: c.VkImageView,
-    sampler: c.VkSampler,
-    allocation: vma.VmaAllocation,
-    width: u32,
-    height: u32,
-};
-
-// ---- Material ----
-// Descriptor set binding MaterialUBO (diffuse color, specular, shininess) and a Texture.
-// Created via Renderer.createMaterial, destroyed via Renderer.destroyMaterial.
-
-pub const Material = struct {
-    descriptor_set: c.VkDescriptorSet,
-    material_ubo: vma.BufferAlloc,
-    material_mapped: [*]u8,
-    texture: *const Texture,
-};
+pub const VkBridgeError = error{VulkanFailed};
 
 // ---- Vulkan context (internal state) ----
 
-const VulkanContext = struct {
+pub const VulkanContext = struct {
     instance: c.VkInstance = null,
     debug_messenger: c.VkDebugUtilsMessengerEXT = null,
     surface: c.VkSurfaceKHR = null,
@@ -183,7 +91,7 @@ const VulkanContext = struct {
     clear_color: c.VkClearValue = .{ .color = .{ .float32 = [4]f32{ 0.0, 0.0, 0.0, 1.0 } } },
 
     // draw call list (filled by draw(), consumed by forward pass callback)
-    draw_list: [MAX_DRAW_CALLS]DrawCall = undefined,
+    draw_list: [rendergraph.MAX_DRAW_CALLS]rendergraph.DrawCall = undefined,
     draw_count: u32 = 0,
 
     // state
@@ -214,9 +122,9 @@ const VulkanContext = struct {
     ubos_initialized: bool = false,
 
     // Accumulated light state — packed into SSBO at beginFrame
-    pending_dir_lights: [MAX_DIR_LIGHTS]LightData = [_]LightData{.{}} ** MAX_DIR_LIGHTS,
-    pending_point_lights: [MAX_POINT_LIGHTS]LightData = [_]LightData{.{}} ** MAX_POINT_LIGHTS,
-    pending_spot_lights: [MAX_SPOT_LIGHTS]LightData = [_]LightData{.{}} ** MAX_SPOT_LIGHTS,
+    pending_dir_lights: [lighting.MAX_DIR_LIGHTS]lighting.LightData = [_]lighting.LightData{.{}} ** lighting.MAX_DIR_LIGHTS,
+    pending_point_lights: [lighting.MAX_POINT_LIGHTS]lighting.LightData = [_]lighting.LightData{.{}} ** lighting.MAX_POINT_LIGHTS,
+    pending_spot_lights: [lighting.MAX_SPOT_LIGHTS]lighting.LightData = [_]lighting.LightData{.{}} ** lighting.MAX_SPOT_LIGHTS,
     num_dir_lights: u32 = 0,
     num_point_lights: u32 = 0,
     num_spot_lights: u32 = 0,
@@ -233,23 +141,6 @@ const VulkanContext = struct {
 
 fn makeVersion(major: u32, minor: u32, patch: u32) u32 {
     return (major << 22) | (minor << 12) | patch;
-}
-
-// getMaxUsableSampleCount returns the highest sample count supported for both
-// color and depth attachments, capped at VK_SAMPLE_COUNT_4_BIT per VK3-16
-// (general cross-vendor performance optimization — 4x is the sweet spot for
-// quality/performance on all hardware tiers).
-fn getMaxUsableSampleCount(physical_device: c.VkPhysicalDevice) c.VkSampleCountFlagBits {
-    var props: c.VkPhysicalDeviceProperties = undefined;
-    c.vkGetPhysicalDeviceProperties(physical_device, &props);
-
-    const counts = props.limits.framebufferColorSampleCounts &
-        props.limits.framebufferDepthSampleCounts;
-
-    // Check 4x first (our cap per VK3-16), then fall back to lower counts
-    if (counts & c.VK_SAMPLE_COUNT_4_BIT != 0) return c.VK_SAMPLE_COUNT_4_BIT;
-    if (counts & c.VK_SAMPLE_COUNT_2_BIT != 0) return c.VK_SAMPLE_COUNT_2_BIT;
-    return c.VK_SAMPLE_COUNT_1_BIT;
 }
 
 fn validationLayerAvailable() bool {
@@ -569,7 +460,7 @@ fn chooseSwapExtent(capabilities: *const c.VkSurfaceCapabilitiesKHR, window: *sd
     };
 }
 
-fn createSwapchain(ctx: *VulkanContext) c.VkResult {
+pub fn createSwapchain(ctx: *VulkanContext) c.VkResult {
     var capabilities: c.VkSurfaceCapabilitiesKHR = undefined;
     _ = c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(ctx.physical_device, ctx.surface, &capabilities);
 
@@ -665,532 +556,6 @@ fn createSwapchain(ctx: *VulkanContext) c.VkResult {
     return c.VK_SUCCESS;
 }
 
-// ---- depth buffer ----
-
-fn findDepthFormat(physical_device: c.VkPhysicalDevice) c.VkFormat {
-    // Try formats in order of preference: D32 pure, D32 with stencil, D24 with stencil
-    // Per VK3-16: cross-vendor compatible selection
-    const candidates = [_]c.VkFormat{
-        c.VK_FORMAT_D32_SFLOAT,
-        c.VK_FORMAT_D32_SFLOAT_S8_UINT,
-        c.VK_FORMAT_D24_UNORM_S8_UINT,
-    };
-
-    for (candidates) |format| {
-        var props: c.VkFormatProperties = undefined;
-        c.vkGetPhysicalDeviceFormatProperties(physical_device, format, &props);
-        if (props.optimalTilingFeatures & c.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT != 0) {
-            return format;
-        }
-    }
-
-    // Fallback — should not happen on any modern GPU
-    return c.VK_FORMAT_D32_SFLOAT;
-}
-
-fn createDepthResources(ctx: *VulkanContext) anyerror!void {
-    ctx.depth_format = findDepthFormat(ctx.physical_device);
-
-    // Create depth image via VMA with MSAA sample count.
-    // SAMPLED_BIT: compute shader reads depth for cluster light culling.
-    const image_alloc = try ctx.vma_ctx.createImageWithSamples(
-        ctx.swapchain_extent.width,
-        ctx.swapchain_extent.height,
-        ctx.depth_format,
-        c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT,
-        true, // gpu_only: device-local
-        ctx.msaa_samples,
-    );
-
-    ctx.depth_image = image_alloc.image;
-    ctx.depth_allocation = image_alloc.allocation;
-
-    // Create image view with DEPTH aspect
-    const view_info = c.VkImageViewCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .image = ctx.depth_image,
-        .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
-        .format = ctx.depth_format,
-        .components = .{
-            .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-        },
-        .subresourceRange = .{
-            .aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-    };
-
-    const result = c.vkCreateImageView(ctx.device, &view_info, null, &ctx.depth_image_view);
-    if (result != c.VK_SUCCESS) return VkBridgeError.VulkanFailed;
-}
-
-fn destroyDepthResources(ctx: *VulkanContext) void {
-    if (ctx.depth_image_view != null) {
-        c.vkDestroyImageView(ctx.device, ctx.depth_image_view, null);
-        ctx.depth_image_view = null;
-    }
-    if (ctx.depth_image != null) {
-        ctx.vma_ctx.destroyImage(ctx.depth_image, ctx.depth_allocation);
-        ctx.depth_image = null;
-    }
-}
-
-// ---- MSAA color attachment ----
-
-fn createMsaaColorResources(ctx: *VulkanContext) anyerror!void {
-    // TRANSIENT_ATTACHMENT: GPU can use tile memory — never needs to be written to system RAM
-    // COLOR_ATTACHMENT: needed for use as render target before resolve
-    const usage = c.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-    const image_alloc = try ctx.vma_ctx.createImageWithSamples(
-        ctx.swapchain_extent.width,
-        ctx.swapchain_extent.height,
-        ctx.swapchain_format,
-        usage,
-        true, // gpu_only: device-local
-        ctx.msaa_samples,
-    );
-
-    ctx.msaa_color_image = image_alloc.image;
-    ctx.msaa_color_allocation = image_alloc.allocation;
-
-    const view_info = c.VkImageViewCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .image = ctx.msaa_color_image,
-        .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
-        .format = ctx.swapchain_format,
-        .components = .{
-            .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-        },
-        .subresourceRange = .{
-            .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-    };
-
-    const result = c.vkCreateImageView(ctx.device, &view_info, null, &ctx.msaa_color_view);
-    if (result != c.VK_SUCCESS) return VkBridgeError.VulkanFailed;
-}
-
-fn destroyMsaaColorResources(ctx: *VulkanContext) void {
-    if (ctx.msaa_color_view != null) {
-        c.vkDestroyImageView(ctx.device, ctx.msaa_color_view, null);
-        ctx.msaa_color_view = null;
-    }
-    if (ctx.msaa_color_image != null) {
-        ctx.vma_ctx.destroyImage(ctx.msaa_color_image, ctx.msaa_color_allocation);
-        ctx.msaa_color_image = null;
-    }
-}
-
-// ---- render pass (with depth attachment) ----
-
-fn createRenderPass(ctx: *VulkanContext) c.VkResult {
-    // Attachment [0]: MSAA color — rendered to, not stored (resolved to swapchain)
-    const msaa_color_attachment = c.VkAttachmentDescription{
-        .flags = 0,
-        .format = ctx.swapchain_format,
-        .samples = ctx.msaa_samples,
-        .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    };
-
-    // Attachment [1]: MSAA depth — loaded from depth prepass, read-only.
-    // Uses READ_ONLY_OPTIMAL: compatible with both depth testing and shader sampling.
-    const depth_attachment = c.VkAttachmentDescription{
-        .flags = 0,
-        .format = ctx.depth_format,
-        .samples = ctx.msaa_samples,
-        .loadOp = c.VK_ATTACHMENT_LOAD_OP_LOAD,
-        .storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-        .finalLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-    };
-
-    // Attachment [2]: Resolve / swapchain — receives resolved output, must be stored
-    const resolve_attachment = c.VkAttachmentDescription{
-        .flags = 0,
-        .format = ctx.swapchain_format,
-        .samples = c.VK_SAMPLE_COUNT_1_BIT,
-        .loadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-    };
-
-    const color_ref = c.VkAttachmentReference{
-        .attachment = 0,
-        .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    };
-
-    const depth_ref = c.VkAttachmentReference{
-        .attachment = 1,
-        .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-    };
-
-    const resolve_ref = c.VkAttachmentReference{
-        .attachment = 2,
-        .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    };
-
-    const subpass = c.VkSubpassDescription{
-        .flags = 0,
-        .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .inputAttachmentCount = 0,
-        .pInputAttachments = null,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &color_ref,
-        .pResolveAttachments = &resolve_ref,
-        .pDepthStencilAttachment = &depth_ref,
-        .preserveAttachmentCount = 0,
-        .pPreserveAttachments = null,
-    };
-
-    // Dependency: color output and depth tests must complete before rendering
-    const dependency = c.VkSubpassDependency{
-        .srcSubpass = c.VK_SUBPASS_EXTERNAL,
-        .dstSubpass = 0,
-        .srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .srcAccessMask = 0,
-        .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-            c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        .dependencyFlags = 0,
-    };
-
-    const attachments = [3]c.VkAttachmentDescription{
-        msaa_color_attachment,
-        depth_attachment,
-        resolve_attachment,
-    };
-
-    const render_pass_info = c.VkRenderPassCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .attachmentCount = 3,
-        .pAttachments = &attachments,
-        .subpassCount = 1,
-        .pSubpasses = &subpass,
-        .dependencyCount = 1,
-        .pDependencies = &dependency,
-    };
-
-    return c.vkCreateRenderPass(ctx.device, &render_pass_info, null, &ctx.render_pass);
-}
-
-// ---- depth prepass render pass ----
-
-fn createDepthRenderPass(ctx: *VulkanContext) c.VkResult {
-    // Single attachment: depth (CLEAR + STORE, no color)
-    const depth_attachment = c.VkAttachmentDescription{
-        .flags = 0,
-        .format = ctx.depth_format,
-        .samples = ctx.msaa_samples,
-        .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };
-
-    const depth_ref = c.VkAttachmentReference{
-        .attachment = 0,
-        .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };
-
-    const subpass = c.VkSubpassDescription{
-        .flags = 0,
-        .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .inputAttachmentCount = 0,
-        .pInputAttachments = null,
-        .colorAttachmentCount = 0,
-        .pColorAttachments = null,
-        .pResolveAttachments = null,
-        .pDepthStencilAttachment = &depth_ref,
-        .preserveAttachmentCount = 0,
-        .pPreserveAttachments = null,
-    };
-
-    const dependency = c.VkSubpassDependency{
-        .srcSubpass = c.VK_SUBPASS_EXTERNAL,
-        .dstSubpass = 0,
-        .srcStageMask = c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .dstStageMask = c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .srcAccessMask = 0,
-        .dstAccessMask = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        .dependencyFlags = 0,
-    };
-
-    const render_pass_info = c.VkRenderPassCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .attachmentCount = 1,
-        .pAttachments = &[1]c.VkAttachmentDescription{depth_attachment},
-        .subpassCount = 1,
-        .pSubpasses = &subpass,
-        .dependencyCount = 1,
-        .pDependencies = &dependency,
-    };
-
-    return c.vkCreateRenderPass(ctx.device, &render_pass_info, null, &ctx.depth_render_pass);
-}
-
-// ---- depth prepass framebuffers ----
-
-fn createDepthFramebuffers(ctx: *VulkanContext) c.VkResult {
-    // All depth framebuffers use the same depth image view (depth buffer is shared)
-    var i: u32 = 0;
-    while (i < ctx.swapchain_image_count) : (i += 1) {
-        const fb_info = c.VkFramebufferCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .renderPass = ctx.depth_render_pass,
-            .attachmentCount = 1,
-            .pAttachments = &[1]c.VkImageView{ctx.depth_image_view},
-            .width = ctx.swapchain_extent.width,
-            .height = ctx.swapchain_extent.height,
-            .layers = 1,
-        };
-
-        const result = c.vkCreateFramebuffer(ctx.device, &fb_info, null, &ctx.depth_framebuffers[i]);
-        if (result != c.VK_SUCCESS) return result;
-    }
-    return c.VK_SUCCESS;
-}
-
-// ---- depth prepass pipeline ----
-
-fn createDepthPipeline(ctx: *VulkanContext) anyerror!void {
-    const vert_module = loadShaderModule(ctx.device, "assets/shaders/depth.vert.spv") orelse {
-        std.debug.print("[TamgaVK3D] Failed to load depth.vert.spv\n", .{});
-        return VkBridgeError.VulkanFailed;
-    };
-    defer c.vkDestroyShaderModule(ctx.device, vert_module, null);
-
-    const frag_module = loadShaderModule(ctx.device, "assets/shaders/depth.frag.spv") orelse {
-        std.debug.print("[TamgaVK3D] Failed to load depth.frag.spv\n", .{});
-        return VkBridgeError.VulkanFailed;
-    };
-    defer c.vkDestroyShaderModule(ctx.device, frag_module, null);
-
-    const shader_stages = [2]c.VkPipelineShaderStageCreateInfo{
-        .{
-            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
-            .module = vert_module,
-            .pName = "main",
-            .pSpecializationInfo = null,
-        },
-        .{
-            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
-            .module = frag_module,
-            .pName = "main",
-            .pSpecializationInfo = null,
-        },
-    };
-
-    // Same vertex input as forward pipeline (D-05 format)
-    const vertex_binding = c.VkVertexInputBindingDescription{
-        .binding = 0,
-        .stride = 48,
-        .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX,
-    };
-
-    const vertex_attributes = [4]c.VkVertexInputAttributeDescription{
-        .{ .location = 0, .binding = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
-        .{ .location = 1, .binding = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 12 },
-        .{ .location = 2, .binding = 0, .format = c.VK_FORMAT_R32G32_SFLOAT, .offset = 24 },
-        .{ .location = 3, .binding = 0, .format = c.VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 32 },
-    };
-
-    const vertex_input_info = c.VkPipelineVertexInputStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .vertexBindingDescriptionCount = 1,
-        .pVertexBindingDescriptions = &vertex_binding,
-        .vertexAttributeDescriptionCount = 4,
-        .pVertexAttributeDescriptions = &vertex_attributes,
-    };
-
-    const input_assembly = c.VkPipelineInputAssemblyStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        .primitiveRestartEnable = c.VK_FALSE,
-    };
-
-    const dynamic_states = [2]c.VkDynamicState{
-        c.VK_DYNAMIC_STATE_VIEWPORT,
-        c.VK_DYNAMIC_STATE_SCISSOR,
-    };
-
-    const dynamic_state_info = c.VkPipelineDynamicStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .dynamicStateCount = 2,
-        .pDynamicStates = &dynamic_states,
-    };
-
-    const viewport_state = c.VkPipelineViewportStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .viewportCount = 1,
-        .pViewports = null,
-        .scissorCount = 1,
-        .pScissors = null,
-    };
-
-    const rasterizer = c.VkPipelineRasterizationStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .depthClampEnable = c.VK_FALSE,
-        .rasterizerDiscardEnable = c.VK_FALSE,
-        .polygonMode = c.VK_POLYGON_MODE_FILL,
-        .cullMode = c.VK_CULL_MODE_BACK_BIT,
-        .frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .depthBiasEnable = c.VK_FALSE,
-        .depthBiasConstantFactor = 0.0,
-        .depthBiasClamp = 0.0,
-        .depthBiasSlopeFactor = 0.0,
-        .lineWidth = 1.0,
-    };
-
-    const multisampling = c.VkPipelineMultisampleStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .rasterizationSamples = ctx.msaa_samples,
-        .sampleShadingEnable = c.VK_FALSE,
-        .minSampleShading = 0.0,
-        .pSampleMask = null,
-        .alphaToCoverageEnable = c.VK_FALSE,
-        .alphaToOneEnable = c.VK_FALSE,
-    };
-
-    // Depth test LESS + write enabled (populate depth buffer)
-    const depth_stencil = c.VkPipelineDepthStencilStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .depthTestEnable = c.VK_TRUE,
-        .depthWriteEnable = c.VK_TRUE,
-        .depthCompareOp = c.VK_COMPARE_OP_LESS,
-        .depthBoundsTestEnable = c.VK_FALSE,
-        .stencilTestEnable = c.VK_FALSE,
-        .front = std.mem.zeroes(c.VkStencilOpState),
-        .back = std.mem.zeroes(c.VkStencilOpState),
-        .minDepthBounds = 0.0,
-        .maxDepthBounds = 1.0,
-    };
-
-    // No color attachments — depth-only pass
-    const color_blending = c.VkPipelineColorBlendStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .logicOpEnable = c.VK_FALSE,
-        .logicOp = c.VK_LOGIC_OP_COPY,
-        .attachmentCount = 0,
-        .pAttachments = null,
-        .blendConstants = [4]f32{ 0.0, 0.0, 0.0, 0.0 },
-    };
-
-    const pipeline_info = c.VkGraphicsPipelineCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .stageCount = 2,
-        .pStages = &shader_stages,
-        .pVertexInputState = &vertex_input_info,
-        .pInputAssemblyState = &input_assembly,
-        .pTessellationState = null,
-        .pViewportState = &viewport_state,
-        .pRasterizationState = &rasterizer,
-        .pMultisampleState = &multisampling,
-        .pDepthStencilState = &depth_stencil,
-        .pColorBlendState = &color_blending,
-        .pDynamicState = &dynamic_state_info,
-        .layout = ctx.pipeline_layout,
-        .renderPass = ctx.depth_render_pass,
-        .subpass = 0,
-        .basePipelineHandle = null,
-        .basePipelineIndex = -1,
-    };
-
-    const result = c.vkCreateGraphicsPipelines(ctx.device, null, 1, &pipeline_info, null, &ctx.depth_pipeline);
-    if (result != c.VK_SUCCESS) return VkBridgeError.VulkanFailed;
-}
-
-// ---- framebuffers (color + depth) ----
-
-fn createFramebuffers(ctx: *VulkanContext) c.VkResult {
-    var i: u32 = 0;
-    while (i < ctx.swapchain_image_count) : (i += 1) {
-        // 3 attachments: [0] MSAA color, [1] MSAA depth, [2] resolve/swapchain
-        const attachments = [3]c.VkImageView{
-            ctx.msaa_color_view,
-            ctx.depth_image_view,
-            ctx.swapchain_views[i],
-        };
-
-        const fb_info = c.VkFramebufferCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .renderPass = ctx.render_pass,
-            .attachmentCount = 3,
-            .pAttachments = &attachments,
-            .width = ctx.swapchain_extent.width,
-            .height = ctx.swapchain_extent.height,
-            .layers = 1,
-        };
-
-        const result = c.vkCreateFramebuffer(ctx.device, &fb_info, null, &ctx.framebuffers[i]);
-        if (result != c.VK_SUCCESS) return result;
-    }
-    return c.VK_SUCCESS;
-}
-
 // ---- command pool + buffers ----
 
 fn createCommandPool(ctx: *VulkanContext) c.VkResult {
@@ -1246,1253 +611,6 @@ fn createSyncObjects(ctx: *VulkanContext) c.VkResult {
     return c.VK_SUCCESS;
 }
 
-// ---- .spv shader loading ----
-
-fn loadShaderModule(device: c.VkDevice, path: [*:0]const u8) ?c.VkShaderModule {
-    const file = std.fs.cwd().openFileZ(path, .{}) catch |err| {
-        std.debug.print("[TamgaVK3D] Failed to open shader: {s} ({any})\n", .{ path, err });
-        return null;
-    };
-    defer file.close();
-
-    const file_size = file.getEndPos() catch return null;
-    if (file_size == 0 or file_size > 1024 * 1024) return null;
-
-    const allocator = std.heap.page_allocator;
-    const buf = allocator.alloc(u8, file_size) catch return null;
-    defer allocator.free(buf);
-
-    const bytes_read = file.readAll(buf) catch return null;
-    if (bytes_read != file_size) return null;
-
-    const shader_info = c.VkShaderModuleCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .codeSize = file_size,
-        .pCode = @ptrCast(@alignCast(buf.ptr)),
-    };
-
-    var shader_module: c.VkShaderModule = null;
-    const result = c.vkCreateShaderModule(device, &shader_info, null, &shader_module);
-    if (result != c.VK_SUCCESS) return null;
-
-    return shader_module;
-}
-
-// ---- descriptor set layouts ----
-
-fn createDescriptorSetLayouts(ctx: *VulkanContext) c.VkResult {
-    // Set 0 (per-frame): binding 0 = CameraUBO, binding 1 = LightSSBO
-    // Accessible from VERTEX + FRAGMENT + COMPUTE (shared between graphics and compute passes)
-    {
-        const bindings = [2]c.VkDescriptorSetLayoutBinding{
-            .{
-                .binding = 0,
-                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .descriptorCount = 1,
-                .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT | c.VK_SHADER_STAGE_COMPUTE_BIT,
-                .pImmutableSamplers = null,
-            },
-            .{
-                .binding = 1,
-                .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .descriptorCount = 1,
-                .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT | c.VK_SHADER_STAGE_COMPUTE_BIT,
-                .pImmutableSamplers = null,
-            },
-        };
-
-        const layout_info = c.VkDescriptorSetLayoutCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .bindingCount = 2,
-            .pBindings = &bindings,
-        };
-
-        const result = c.vkCreateDescriptorSetLayout(ctx.device, &layout_info, null, &ctx.descriptor_set_layout_0);
-        if (result != c.VK_SUCCESS) return result;
-    }
-
-    // Set 1 (per-material): binding 0 = MaterialUBO (FRAGMENT), binding 1 = sampler2D (FRAGMENT)
-    {
-        const bindings = [2]c.VkDescriptorSetLayoutBinding{
-            .{
-                .binding = 0,
-                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .descriptorCount = 1,
-                .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
-                .pImmutableSamplers = null,
-            },
-            .{
-                .binding = 1,
-                .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
-                .pImmutableSamplers = null,
-            },
-        };
-
-        const layout_info = c.VkDescriptorSetLayoutCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .bindingCount = 2,
-            .pBindings = &bindings,
-        };
-
-        const result = c.vkCreateDescriptorSetLayout(ctx.device, &layout_info, null, &ctx.descriptor_set_layout_1);
-        if (result != c.VK_SUCCESS) return result;
-    }
-
-    return c.VK_SUCCESS;
-}
-
-// ---- UBO management ----
-
-fn createUBOs(ctx: *VulkanContext) anyerror!void {
-    const ubo_usage: u32 = 0x00000010; // VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
-    const ssbo_usage: u32 = 0x00000020; // VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-
-    // Light SSBO size: header (16 bytes) + MAX_LIGHTS * LightData (80 bytes each)
-    ctx.light_ssbo_size = @sizeOf(LightSSBOHeader) + MAX_LIGHTS * @sizeOf(LightData);
-
-    var i: u32 = 0;
-    while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
-        // Camera UBO — host-visible + persistently mapped
-        const cam_alloc = try ctx.vma_ctx.createBuffer(@sizeOf(CameraUBO), ubo_usage, false);
-        ctx.camera_ubos[i] = cam_alloc;
-        ctx.camera_mapped[i] = ctx.vma_ctx.mapBuffer(cam_alloc.allocation) orelse return VkBridgeError.VulkanFailed;
-
-        // Light SSBO — host-visible + persistently mapped
-        const light_alloc = try ctx.vma_ctx.createBuffer(ctx.light_ssbo_size, ssbo_usage, false);
-        ctx.light_ssbos[i] = light_alloc;
-        ctx.light_mapped[i] = ctx.vma_ctx.mapBuffer(light_alloc.allocation) orelse return VkBridgeError.VulkanFailed;
-
-        // Zero the SSBO (no lights active by default)
-        const header = LightSSBOHeader{};
-        @memcpy(ctx.light_mapped[i][0..@sizeOf(LightSSBOHeader)], std.mem.asBytes(&header));
-    }
-
-    ctx.ubos_initialized = true;
-}
-
-// flushLightSSBO packs the pending per-type light arrays into the flat SSBO.
-// Layout: [header (16 bytes)] [dir lights] [point lights] [spot lights]
-fn flushLightSSBO(ctx: *VulkanContext, frame: u32) void {
-    const mapped = ctx.light_mapped[frame];
-    const header_size = @sizeOf(LightSSBOHeader);
-    const light_size = @sizeOf(LightData);
-    var offset: u32 = 0;
-
-    // Copy directional lights
-    var i: u32 = 0;
-    while (i < ctx.num_dir_lights) : (i += 1) {
-        const dst_start = header_size + offset * light_size;
-        @memcpy(mapped[dst_start .. dst_start + light_size], std.mem.asBytes(&ctx.pending_dir_lights[i]));
-        offset += 1;
-    }
-
-    // Copy point lights
-    i = 0;
-    while (i < ctx.num_point_lights) : (i += 1) {
-        const dst_start = header_size + offset * light_size;
-        @memcpy(mapped[dst_start .. dst_start + light_size], std.mem.asBytes(&ctx.pending_point_lights[i]));
-        offset += 1;
-    }
-
-    // Copy spot lights
-    i = 0;
-    while (i < ctx.num_spot_lights) : (i += 1) {
-        const dst_start = header_size + offset * light_size;
-        @memcpy(mapped[dst_start .. dst_start + light_size], std.mem.asBytes(&ctx.pending_spot_lights[i]));
-        offset += 1;
-    }
-
-    // Write header
-    const header = LightSSBOHeader{ .num_lights = @intCast(offset) };
-    @memcpy(mapped[0..header_size], std.mem.asBytes(&header));
-}
-
-fn destroyUBOs(ctx: *VulkanContext) void {
-    if (!ctx.ubos_initialized) return;
-    var i: u32 = 0;
-    while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
-        ctx.vma_ctx.unmapBuffer(ctx.camera_ubos[i].allocation);
-        ctx.vma_ctx.destroyBuffer(ctx.camera_ubos[i].buffer, ctx.camera_ubos[i].allocation);
-        ctx.vma_ctx.unmapBuffer(ctx.light_ssbos[i].allocation);
-        ctx.vma_ctx.destroyBuffer(ctx.light_ssbos[i].buffer, ctx.light_ssbos[i].allocation);
-    }
-    ctx.ubos_initialized = false;
-}
-
-// ---- descriptor pool and per-frame sets ----
-
-fn createDescriptorPool(ctx: *VulkanContext) c.VkResult {
-    // Size the pool generously to avoid VK_ERROR_OUT_OF_POOL_MEMORY
-    const pool_sizes = [3]c.VkDescriptorPoolSize{
-        .{
-            .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = 16,
-        },
-        .{
-            .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .descriptorCount = 8,
-        },
-        .{
-            .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 64,
-        },
-    };
-
-    const pool_info = c.VkDescriptorPoolCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .maxSets = MAX_FRAMES_IN_FLIGHT + 16,
-        .poolSizeCount = 3,
-        .pPoolSizes = &pool_sizes,
-    };
-
-    return c.vkCreateDescriptorPool(ctx.device, &pool_info, null, &ctx.descriptor_pool);
-}
-
-fn allocatePerFrameDescriptorSets(ctx: *VulkanContext) c.VkResult {
-    var layouts: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSetLayout = [_]c.VkDescriptorSetLayout{null} ** MAX_FRAMES_IN_FLIGHT;
-    var i: u32 = 0;
-    while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
-        layouts[i] = ctx.descriptor_set_layout_0;
-    }
-
-    const alloc_info = c.VkDescriptorSetAllocateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .pNext = null,
-        .descriptorPool = ctx.descriptor_pool,
-        .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
-        .pSetLayouts = &layouts,
-    };
-
-    const result = c.vkAllocateDescriptorSets(ctx.device, &alloc_info, &ctx.descriptor_sets_0);
-    if (result != c.VK_SUCCESS) return result;
-
-    // Write camera UBO and light SSBO bindings for each frame
-    i = 0;
-    while (i < MAX_FRAMES_IN_FLIGHT) : (i += 1) {
-        const cam_buf_info = c.VkDescriptorBufferInfo{
-            .buffer = ctx.camera_ubos[i].buffer,
-            .offset = 0,
-            .range = @sizeOf(CameraUBO),
-        };
-
-        const light_buf_info = c.VkDescriptorBufferInfo{
-            .buffer = ctx.light_ssbos[i].buffer,
-            .offset = 0,
-            .range = ctx.light_ssbo_size,
-        };
-
-        const writes = [2]c.VkWriteDescriptorSet{
-            .{
-                .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = null,
-                .dstSet = ctx.descriptor_sets_0[i],
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .pImageInfo = null,
-                .pBufferInfo = &cam_buf_info,
-                .pTexelBufferView = null,
-            },
-            .{
-                .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = null,
-                .dstSet = ctx.descriptor_sets_0[i],
-                .dstBinding = 1,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .pImageInfo = null,
-                .pBufferInfo = &light_buf_info,
-                .pTexelBufferView = null,
-            },
-        };
-
-        c.vkUpdateDescriptorSets(ctx.device, 2, &writes, 0, null);
-    }
-
-    return c.VK_SUCCESS;
-}
-
-// ---- graphics pipeline ----
-
-fn createGraphicsPipeline(ctx: *VulkanContext) anyerror!void {
-    // Load SPIR-V shaders from assets/shaders/
-    const vert_module = loadShaderModule(ctx.device, "assets/shaders/mesh.vert.spv") orelse {
-        std.debug.print("[TamgaVK3D] Failed to load mesh.vert.spv\n", .{});
-        return VkBridgeError.VulkanFailed;
-    };
-    defer c.vkDestroyShaderModule(ctx.device, vert_module, null);
-
-    const frag_module = loadShaderModule(ctx.device, "assets/shaders/mesh.frag.spv") orelse {
-        std.debug.print("[TamgaVK3D] Failed to load mesh.frag.spv\n", .{});
-        return VkBridgeError.VulkanFailed;
-    };
-    defer c.vkDestroyShaderModule(ctx.device, frag_module, null);
-
-    const shader_stages = [2]c.VkPipelineShaderStageCreateInfo{
-        .{
-            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
-            .module = vert_module,
-            .pName = "main",
-            .pSpecializationInfo = null,
-        },
-        .{
-            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
-            .module = frag_module,
-            .pName = "main",
-            .pSpecializationInfo = null,
-        },
-    };
-
-    // Vertex input: single binding, 4 attributes matching D-05 vertex format
-    // stride = 48 bytes: vec3 pos (12) + vec3 normal (12) + vec2 uv (8) + vec4 color (16)
-    const vertex_binding = c.VkVertexInputBindingDescription{
-        .binding = 0,
-        .stride = 48,
-        .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX,
-    };
-
-    const vertex_attributes = [4]c.VkVertexInputAttributeDescription{
-        .{ .location = 0, .binding = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 }, // position
-        .{ .location = 1, .binding = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 12 }, // normal
-        .{ .location = 2, .binding = 0, .format = c.VK_FORMAT_R32G32_SFLOAT, .offset = 24 }, // uv
-        .{ .location = 3, .binding = 0, .format = c.VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 32 }, // color
-    };
-
-    const vertex_input_info = c.VkPipelineVertexInputStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .vertexBindingDescriptionCount = 1,
-        .pVertexBindingDescriptions = &vertex_binding,
-        .vertexAttributeDescriptionCount = 4,
-        .pVertexAttributeDescriptions = &vertex_attributes,
-    };
-
-    const input_assembly = c.VkPipelineInputAssemblyStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        .primitiveRestartEnable = c.VK_FALSE,
-    };
-
-    // Dynamic viewport and scissor — set in beginFrame
-    const dynamic_states = [2]c.VkDynamicState{
-        c.VK_DYNAMIC_STATE_VIEWPORT,
-        c.VK_DYNAMIC_STATE_SCISSOR,
-    };
-
-    const dynamic_state_info = c.VkPipelineDynamicStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .dynamicStateCount = 2,
-        .pDynamicStates = &dynamic_states,
-    };
-
-    const viewport_state = c.VkPipelineViewportStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .viewportCount = 1,
-        .pViewports = null, // dynamic
-        .scissorCount = 1,
-        .pScissors = null, // dynamic
-    };
-
-    const rasterizer = c.VkPipelineRasterizationStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .depthClampEnable = c.VK_FALSE,
-        .rasterizerDiscardEnable = c.VK_FALSE,
-        .polygonMode = c.VK_POLYGON_MODE_FILL,
-        .cullMode = c.VK_CULL_MODE_BACK_BIT,
-        .frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .depthBiasEnable = c.VK_FALSE,
-        .depthBiasConstantFactor = 0.0,
-        .depthBiasClamp = 0.0,
-        .depthBiasSlopeFactor = 0.0,
-        .lineWidth = 1.0,
-    };
-
-    const multisampling = c.VkPipelineMultisampleStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .rasterizationSamples = ctx.msaa_samples,
-        .sampleShadingEnable = if (ctx.msaa_samples != c.VK_SAMPLE_COUNT_1_BIT) c.VK_TRUE else c.VK_FALSE,
-        .minSampleShading = 0.2, // subtle sub-sample shading improvement (only active when > 1x)
-        .pSampleMask = null,
-        .alphaToCoverageEnable = c.VK_FALSE,
-        .alphaToOneEnable = c.VK_FALSE,
-    };
-
-    // Depth test EQUAL + write disabled — depth prepass already populated the buffer.
-    // Only fragments at the exact prepass depth pass, giving zero overdraw.
-    const depth_stencil = c.VkPipelineDepthStencilStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .depthTestEnable = c.VK_TRUE,
-        .depthWriteEnable = c.VK_FALSE,
-        .depthCompareOp = c.VK_COMPARE_OP_EQUAL,
-        .depthBoundsTestEnable = c.VK_FALSE,
-        .stencilTestEnable = c.VK_FALSE,
-        .front = std.mem.zeroes(c.VkStencilOpState),
-        .back = std.mem.zeroes(c.VkStencilOpState),
-        .minDepthBounds = 0.0,
-        .maxDepthBounds = 1.0,
-    };
-
-    const color_blend_attachment = c.VkPipelineColorBlendAttachmentState{
-        .blendEnable = c.VK_TRUE,
-        .srcColorBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA,
-        .dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-        .colorBlendOp = c.VK_BLEND_OP_ADD,
-        .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
-        .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ZERO,
-        .alphaBlendOp = c.VK_BLEND_OP_ADD,
-        .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT |
-            c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
-    };
-
-    const color_blending = c.VkPipelineColorBlendStateCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .logicOpEnable = c.VK_FALSE,
-        .logicOp = c.VK_LOGIC_OP_COPY,
-        .attachmentCount = 1,
-        .pAttachments = &color_blend_attachment,
-        .blendConstants = [4]f32{ 0.0, 0.0, 0.0, 0.0 },
-    };
-
-    // Pipeline layout: 2 descriptor set layouts + push constants (model matrix 64 bytes)
-    const push_constant_range = c.VkPushConstantRange{
-        .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT,
-        .offset = 0,
-        .size = 64, // mat4 = 16 * 4 bytes
-    };
-
-    const set_layouts = [2]c.VkDescriptorSetLayout{ ctx.descriptor_set_layout_0, ctx.descriptor_set_layout_1 };
-
-    const layout_info = c.VkPipelineLayoutCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .setLayoutCount = 2,
-        .pSetLayouts = &set_layouts,
-        .pushConstantRangeCount = 1,
-        .pPushConstantRanges = &push_constant_range,
-    };
-
-    const layout_result = c.vkCreatePipelineLayout(ctx.device, &layout_info, null, &ctx.pipeline_layout);
-    if (layout_result != c.VK_SUCCESS) return VkBridgeError.VulkanFailed;
-
-    // Create graphics pipeline
-    const pipeline_info = c.VkGraphicsPipelineCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .stageCount = 2,
-        .pStages = &shader_stages,
-        .pVertexInputState = &vertex_input_info,
-        .pInputAssemblyState = &input_assembly,
-        .pTessellationState = null,
-        .pViewportState = &viewport_state,
-        .pRasterizationState = &rasterizer,
-        .pMultisampleState = &multisampling,
-        .pDepthStencilState = &depth_stencil,
-        .pColorBlendState = &color_blending,
-        .pDynamicState = &dynamic_state_info,
-        .layout = ctx.pipeline_layout,
-        .renderPass = ctx.render_pass,
-        .subpass = 0,
-        .basePipelineHandle = null,
-        .basePipelineIndex = -1,
-    };
-
-    const pipeline_result = c.vkCreateGraphicsPipelines(ctx.device, null, 1, &pipeline_info, null, &ctx.pipeline);
-    if (pipeline_result != c.VK_SUCCESS) return VkBridgeError.VulkanFailed;
-}
-
-// ---- mesh buffer management ----
-
-fn createMeshBuffers(
-    ctx: *VulkanContext,
-    vertices: [*]const u8,
-    vertex_byte_size: u32,
-    indices: [*]const u32,
-    index_count: u32,
-) anyerror!MeshBuffers {
-    const index_byte_size: u32 = index_count * @sizeOf(u32);
-
-    // Vertex buffer: GPU-local, requires staging upload
-    const vertex_usage: u32 = 0x00000080 | 0x00000002; // VERTEX_BUFFER | TRANSFER_DST
-    const vertex_alloc = try ctx.vma_ctx.createBuffer(vertex_byte_size, vertex_usage, true);
-
-    // Index buffer: GPU-local, requires staging upload
-    const index_usage: u32 = 0x00000100 | 0x00000002; // INDEX_BUFFER | TRANSFER_DST
-    const index_alloc = try ctx.vma_ctx.createBuffer(index_byte_size, index_usage, true);
-
-    // Upload vertex data via staging ring
-    const vert_region = try ctx.vma_ctx.stagingWrite(vertices, vertex_byte_size);
-
-    // Upload index data via staging ring
-    const idx_bytes: [*]const u8 = @ptrCast(indices);
-    const index_region = try ctx.vma_ctx.stagingWrite(idx_bytes, index_byte_size);
-
-    // Record copy commands in a one-shot command buffer
-    const cmd = beginOneShot(ctx) orelse return VkBridgeError.VulkanFailed;
-
-    // Copy vertex data
-    const vert_copy = c.VkBufferCopy{
-        .srcOffset = vert_region.offset,
-        .dstOffset = 0,
-        .size = vertex_byte_size,
-    };
-    c.vkCmdCopyBuffer(cmd, vert_region.buffer, vertex_alloc.buffer, 1, &vert_copy);
-
-    // Copy index data
-    const index_copy = c.VkBufferCopy{
-        .srcOffset = index_region.offset,
-        .dstOffset = 0,
-        .size = index_byte_size,
-    };
-    c.vkCmdCopyBuffer(cmd, index_region.buffer, index_alloc.buffer, 1, &index_copy);
-
-    submitOneShot(ctx, cmd);
-
-    return MeshBuffers{
-        .vertex_buffer = vertex_alloc.buffer,
-        .vertex_allocation = vertex_alloc.allocation,
-        .index_buffer = index_alloc.buffer,
-        .index_allocation = index_alloc.allocation,
-        .index_count = index_count,
-    };
-}
-
-// ---- one-shot command buffer submit helper ----
-
-fn submitOneShot(ctx: *VulkanContext, cmd: c.VkCommandBuffer) void {
-    _ = c.vkEndCommandBuffer(cmd);
-
-    const submit_info = c.VkSubmitInfo{
-        .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .pNext = null,
-        .waitSemaphoreCount = 0,
-        .pWaitSemaphores = null,
-        .pWaitDstStageMask = null,
-        .commandBufferCount = 1,
-        .pCommandBuffers = &cmd,
-        .signalSemaphoreCount = 0,
-        .pSignalSemaphores = null,
-    };
-
-    _ = c.vkQueueSubmit(ctx.graphics_queue, 1, &submit_info, null);
-    _ = c.vkQueueWaitIdle(ctx.graphics_queue);
-    c.vkFreeCommandBuffers(ctx.device, ctx.command_pool, 1, &cmd);
-}
-
-fn beginOneShot(ctx: *VulkanContext) ?c.VkCommandBuffer {
-    const alloc_info = c.VkCommandBufferAllocateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .pNext = null,
-        .commandPool = ctx.command_pool,
-        .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1,
-    };
-
-    var cmd: c.VkCommandBuffer = null;
-    if (c.vkAllocateCommandBuffers(ctx.device, &alloc_info, &cmd) != c.VK_SUCCESS) return null;
-
-    const begin_info = c.VkCommandBufferBeginInfo{
-        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext = null,
-        .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-        .pInheritanceInfo = null,
-    };
-    _ = c.vkBeginCommandBuffer(cmd, &begin_info);
-    return cmd;
-}
-
-// ---- image layout transition ----
-
-fn transitionImageLayout(
-    cmd: c.VkCommandBuffer,
-    image: c.VkImage,
-    old_layout: c.VkImageLayout,
-    new_layout: c.VkImageLayout,
-    src_stage: c.VkPipelineStageFlags,
-    dst_stage: c.VkPipelineStageFlags,
-    src_access: c.VkAccessFlags,
-    dst_access: c.VkAccessFlags,
-) void {
-    const barrier = c.VkImageMemoryBarrier{
-        .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .pNext = null,
-        .srcAccessMask = src_access,
-        .dstAccessMask = dst_access,
-        .oldLayout = old_layout,
-        .newLayout = new_layout,
-        .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
-        .image = image,
-        .subresourceRange = .{
-            .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-    };
-
-    c.vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, null, 0, null, 1, &barrier);
-}
-
-// ---- texture creation and destruction ----
-
-fn textureLoad(ctx: *VulkanContext, path: [*:0]const u8) anyerror!Texture {
-    // Load image via stb_image, forcing RGBA (4 channels)
-    var width: c_int = 0;
-    var height: c_int = 0;
-    var channels: c_int = 0;
-    const pixels = stbi.stbi_load(path, &width, &height, &channels, 4);
-    if (pixels == null) {
-        std.debug.print("[TamgaVK3D] stbi_load failed: {s}\n", .{path});
-        return VkBridgeError.VulkanFailed;
-    }
-    defer stbi.stbi_image_free(pixels);
-
-    const w: u32 = @intCast(width);
-    const h: u32 = @intCast(height);
-    const image_size: u32 = w * h * 4;
-
-    // Write pixel data to staging ring
-    const staging_region = try ctx.vma_ctx.stagingWrite(@ptrCast(pixels), image_size);
-
-    // Create device-local VkImage via VMA (TRANSFER_DST | SAMPLED, R8G8B8A8_SRGB)
-    const image_usage: c.VkImageUsageFlags = c.VK_IMAGE_USAGE_TRANSFER_DST_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT;
-    const image_alloc = try ctx.vma_ctx.createImage(w, h, c.VK_FORMAT_R8G8B8A8_SRGB, image_usage, true);
-
-    // Transition: UNDEFINED -> TRANSFER_DST_OPTIMAL, then copy, then SHADER_READ_ONLY_OPTIMAL
-    const cmd = beginOneShot(ctx) orelse return VkBridgeError.VulkanFailed;
-
-    transitionImageLayout(
-        cmd,
-        image_alloc.image,
-        c.VK_IMAGE_LAYOUT_UNDEFINED,
-        c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        c.VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0,
-        c.VK_ACCESS_TRANSFER_WRITE_BIT,
-    );
-
-    const buffer_image_copy = c.VkBufferImageCopy{
-        .bufferOffset = staging_region.offset,
-        .bufferRowLength = 0,
-        .bufferImageHeight = 0,
-        .imageSubresource = .{
-            .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
-            .mipLevel = 0,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-        .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
-        .imageExtent = .{ .width = w, .height = h, .depth = 1 },
-    };
-    c.vkCmdCopyBufferToImage(
-        cmd,
-        staging_region.buffer,
-        image_alloc.image,
-        c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        1,
-        &buffer_image_copy,
-    );
-
-    transitionImageLayout(
-        cmd,
-        image_alloc.image,
-        c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        c.VK_PIPELINE_STAGE_TRANSFER_BIT,
-        c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        c.VK_ACCESS_TRANSFER_WRITE_BIT,
-        c.VK_ACCESS_SHADER_READ_BIT,
-    );
-
-    submitOneShot(ctx, cmd);
-
-    // Create VkImageView (R8G8B8A8_SRGB, COLOR aspect)
-    const view_info = c.VkImageViewCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .image = image_alloc.image,
-        .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
-        .format = c.VK_FORMAT_R8G8B8A8_SRGB,
-        .components = .{
-            .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-        },
-        .subresourceRange = .{
-            .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-    };
-
-    var view: c.VkImageView = null;
-    if (c.vkCreateImageView(ctx.device, &view_info, null, &view) != c.VK_SUCCESS) {
-        ctx.vma_ctx.destroyImage(image_alloc.image, image_alloc.allocation);
-        return VkBridgeError.VulkanFailed;
-    }
-
-    // Create VkSampler (LINEAR filter, REPEAT address mode)
-    const sampler_info = c.VkSamplerCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .magFilter = c.VK_FILTER_LINEAR,
-        .minFilter = c.VK_FILTER_LINEAR,
-        .mipmapMode = c.VK_SAMPLER_MIPMAP_MODE_LINEAR,
-        .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .mipLodBias = 0.0,
-        .anisotropyEnable = c.VK_FALSE,
-        .maxAnisotropy = 1.0,
-        .compareEnable = c.VK_FALSE,
-        .compareOp = c.VK_COMPARE_OP_ALWAYS,
-        .minLod = 0.0,
-        .maxLod = 0.0,
-        .borderColor = c.VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-        .unnormalizedCoordinates = c.VK_FALSE,
-    };
-
-    var sampler: c.VkSampler = null;
-    if (c.vkCreateSampler(ctx.device, &sampler_info, null, &sampler) != c.VK_SUCCESS) {
-        c.vkDestroyImageView(ctx.device, view, null);
-        ctx.vma_ctx.destroyImage(image_alloc.image, image_alloc.allocation);
-        return VkBridgeError.VulkanFailed;
-    }
-
-    return Texture{
-        .image = image_alloc.image,
-        .view = view,
-        .sampler = sampler,
-        .allocation = image_alloc.allocation,
-        .width = w,
-        .height = h,
-    };
-}
-
-fn textureFree(ctx: *VulkanContext, tex: *Texture) void {
-    if (tex.sampler != null) c.vkDestroySampler(ctx.device, tex.sampler, null);
-    if (tex.view != null) c.vkDestroyImageView(ctx.device, tex.view, null);
-    ctx.vma_ctx.destroyImage(tex.image, tex.allocation);
-}
-
-// createDefaultTexture creates a 1x1 white RGBA texture for materials with no texture assigned.
-fn textureCreateDefault(ctx: *VulkanContext) anyerror!Texture {
-    // 1x1 white pixel: R=255, G=255, B=255, A=255
-    var pixels = [4]u8{ 255, 255, 255, 255 };
-    const staging_region = try ctx.vma_ctx.stagingWrite(&pixels, 4);
-
-    const image_usage: c.VkImageUsageFlags = c.VK_IMAGE_USAGE_TRANSFER_DST_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT;
-    const image_alloc = try ctx.vma_ctx.createImage(1, 1, c.VK_FORMAT_R8G8B8A8_SRGB, image_usage, true);
-
-    const cmd = beginOneShot(ctx) orelse return VkBridgeError.VulkanFailed;
-
-    transitionImageLayout(
-        cmd,
-        image_alloc.image,
-        c.VK_IMAGE_LAYOUT_UNDEFINED,
-        c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        c.VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0,
-        c.VK_ACCESS_TRANSFER_WRITE_BIT,
-    );
-
-    const buffer_image_copy = c.VkBufferImageCopy{
-        .bufferOffset = staging_region.offset,
-        .bufferRowLength = 0,
-        .bufferImageHeight = 0,
-        .imageSubresource = .{
-            .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
-            .mipLevel = 0,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-        .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
-        .imageExtent = .{ .width = 1, .height = 1, .depth = 1 },
-    };
-    c.vkCmdCopyBufferToImage(
-        cmd,
-        staging_region.buffer,
-        image_alloc.image,
-        c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        1,
-        &buffer_image_copy,
-    );
-
-    transitionImageLayout(
-        cmd,
-        image_alloc.image,
-        c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        c.VK_PIPELINE_STAGE_TRANSFER_BIT,
-        c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        c.VK_ACCESS_TRANSFER_WRITE_BIT,
-        c.VK_ACCESS_SHADER_READ_BIT,
-    );
-
-    submitOneShot(ctx, cmd);
-
-    const view_info = c.VkImageViewCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .image = image_alloc.image,
-        .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
-        .format = c.VK_FORMAT_R8G8B8A8_SRGB,
-        .components = .{
-            .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-        },
-        .subresourceRange = .{
-            .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-    };
-
-    var view: c.VkImageView = null;
-    if (c.vkCreateImageView(ctx.device, &view_info, null, &view) != c.VK_SUCCESS) {
-        ctx.vma_ctx.destroyImage(image_alloc.image, image_alloc.allocation);
-        return VkBridgeError.VulkanFailed;
-    }
-
-    const sampler_info = c.VkSamplerCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .magFilter = c.VK_FILTER_NEAREST,
-        .minFilter = c.VK_FILTER_NEAREST,
-        .mipmapMode = c.VK_SAMPLER_MIPMAP_MODE_NEAREST,
-        .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .mipLodBias = 0.0,
-        .anisotropyEnable = c.VK_FALSE,
-        .maxAnisotropy = 1.0,
-        .compareEnable = c.VK_FALSE,
-        .compareOp = c.VK_COMPARE_OP_ALWAYS,
-        .minLod = 0.0,
-        .maxLod = 0.0,
-        .borderColor = c.VK_BORDER_COLOR_INT_OPAQUE_WHITE,
-        .unnormalizedCoordinates = c.VK_FALSE,
-    };
-
-    var sampler: c.VkSampler = null;
-    if (c.vkCreateSampler(ctx.device, &sampler_info, null, &sampler) != c.VK_SUCCESS) {
-        c.vkDestroyImageView(ctx.device, view, null);
-        ctx.vma_ctx.destroyImage(image_alloc.image, image_alloc.allocation);
-        return VkBridgeError.VulkanFailed;
-    }
-
-    return Texture{
-        .image = image_alloc.image,
-        .view = view,
-        .sampler = sampler,
-        .allocation = image_alloc.allocation,
-        .width = 1,
-        .height = 1,
-    };
-}
-
-// ---- material creation and destruction ----
-
-fn materialCreate(
-    ctx: *VulkanContext,
-    diffuse_r: f32,
-    diffuse_g: f32,
-    diffuse_b: f32,
-    diffuse_a: f32,
-    specular: f32,
-    shininess: f32,
-    texture: *const Texture,
-) anyerror!Material {
-    const ubo_usage: u32 = 0x00000010; // VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
-
-    // Allocate material UBO (host-visible, persistently mapped)
-    const mat_alloc = try ctx.vma_ctx.createBuffer(@sizeOf(MaterialUBOData), ubo_usage, false);
-    const mat_mapped = ctx.vma_ctx.mapBuffer(mat_alloc.allocation) orelse {
-        ctx.vma_ctx.destroyBuffer(mat_alloc.buffer, mat_alloc.allocation);
-        return VkBridgeError.VulkanFailed;
-    };
-
-    // Write initial MaterialUBO data
-    const ubo_data = MaterialUBOData{
-        .diffuse_color = [4]f32{ diffuse_r, diffuse_g, diffuse_b, diffuse_a },
-        .specular = specular,
-        .shininess = shininess,
-    };
-    @memcpy(mat_mapped[0..@sizeOf(MaterialUBOData)], std.mem.asBytes(&ubo_data));
-
-    // Allocate descriptor set from pool using Set 1 layout (MaterialUBO + sampler)
-    const alloc_info = c.VkDescriptorSetAllocateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .pNext = null,
-        .descriptorPool = ctx.descriptor_pool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = &ctx.descriptor_set_layout_1,
-    };
-
-    var desc_set: c.VkDescriptorSet = null;
-    if (c.vkAllocateDescriptorSets(ctx.device, &alloc_info, &desc_set) != c.VK_SUCCESS) {
-        ctx.vma_ctx.unmapBuffer(mat_alloc.allocation);
-        ctx.vma_ctx.destroyBuffer(mat_alloc.buffer, mat_alloc.allocation);
-        return VkBridgeError.VulkanFailed;
-    }
-
-    // Write descriptor set: binding 0 = MaterialUBO, binding 1 = texture sampler+view
-    const buf_info = c.VkDescriptorBufferInfo{
-        .buffer = mat_alloc.buffer,
-        .offset = 0,
-        .range = @sizeOf(MaterialUBOData),
-    };
-
-    const img_info = c.VkDescriptorImageInfo{
-        .sampler = texture.sampler,
-        .imageView = texture.view,
-        .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    };
-
-    const writes = [2]c.VkWriteDescriptorSet{
-        .{
-            .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext = null,
-            .dstSet = desc_set,
-            .dstBinding = 0,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .pImageInfo = null,
-            .pBufferInfo = &buf_info,
-            .pTexelBufferView = null,
-        },
-        .{
-            .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext = null,
-            .dstSet = desc_set,
-            .dstBinding = 1,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = &img_info,
-            .pBufferInfo = null,
-            .pTexelBufferView = null,
-        },
-    };
-
-    c.vkUpdateDescriptorSets(ctx.device, 2, &writes, 0, null);
-
-    return Material{
-        .descriptor_set = desc_set,
-        .material_ubo = mat_alloc,
-        .material_mapped = mat_mapped,
-        .texture = texture,
-    };
-}
-
-fn materialFree(ctx: *VulkanContext, mat: *Material) void {
-    ctx.vma_ctx.unmapBuffer(mat.material_ubo.allocation);
-    ctx.vma_ctx.destroyBuffer(mat.material_ubo.buffer, mat.material_ubo.allocation);
-    // descriptor set is freed with the pool — no explicit free needed
-}
-
-// ---- swapchain cleanup + recreation ----
-
-fn cleanupSwapchain(ctx: *VulkanContext) void {
-    // Destroy in reverse creation order:
-    // 1. Framebuffers (forward + depth prepass)
-    var i: u32 = 0;
-    while (i < ctx.swapchain_image_count) : (i += 1) {
-        if (ctx.framebuffers[i] != null) {
-            c.vkDestroyFramebuffer(ctx.device, ctx.framebuffers[i], null);
-            ctx.framebuffers[i] = null;
-        }
-        if (ctx.depth_framebuffers[i] != null) {
-            c.vkDestroyFramebuffer(ctx.device, ctx.depth_framebuffers[i], null);
-            ctx.depth_framebuffers[i] = null;
-        }
-    }
-
-    // 2. MSAA color image + view (VMA free)
-    destroyMsaaColorResources(ctx);
-
-    // 3. Depth image + view (VMA free)
-    destroyDepthResources(ctx);
-
-    // 4. Swapchain image views
-    i = 0;
-    while (i < ctx.swapchain_image_count) : (i += 1) {
-        if (ctx.swapchain_views[i] != null) {
-            c.vkDestroyImageView(ctx.device, ctx.swapchain_views[i], null);
-            ctx.swapchain_views[i] = null;
-        }
-    }
-
-    // 5. Swapchain
-    if (ctx.swapchain != null) {
-        c.vkDestroySwapchainKHR(ctx.device, ctx.swapchain, null);
-        ctx.swapchain = null;
-    }
-}
-
-fn recreateSwapchain(ctx: *VulkanContext) bool {
-    // handle minimized window
-    var w: c_int = 0;
-    var h: c_int = 0;
-    _ = sdl.SDL_GetWindowSizeInPixels(ctx.sdl_window.?, &w, &h);
-    if (w == 0 or h == 0) return false;
-
-    _ = c.vkDeviceWaitIdle(ctx.device);
-
-    const old_format = ctx.swapchain_format;
-    cleanupSwapchain(ctx);
-
-    // 1. Recreate swapchain + image views (updates swapchain_format and swapchain_extent)
-    if (createSwapchain(ctx) != c.VK_SUCCESS) return false;
-
-    // Handle format change: recreate render passes and pipelines if format changed (rare)
-    if (ctx.swapchain_format != old_format) {
-        if (ctx.render_pass != null) {
-            c.vkDestroyRenderPass(ctx.device, ctx.render_pass, null);
-            ctx.render_pass = null;
-        }
-        if (ctx.depth_render_pass != null) {
-            c.vkDestroyRenderPass(ctx.device, ctx.depth_render_pass, null);
-            ctx.depth_render_pass = null;
-        }
-        if (ctx.pipeline != null) {
-            c.vkDestroyPipeline(ctx.device, ctx.pipeline, null);
-            ctx.pipeline = null;
-        }
-        if (ctx.depth_pipeline != null) {
-            c.vkDestroyPipeline(ctx.device, ctx.depth_pipeline, null);
-            ctx.depth_pipeline = null;
-        }
-        if (createDepthRenderPass(ctx) != c.VK_SUCCESS) return false;
-        if (createRenderPass(ctx) != c.VK_SUCCESS) return false;
-        createGraphicsPipeline(ctx) catch return false;
-        createDepthPipeline(ctx) catch return false;
-    }
-
-    // 2. Recreate depth resources with MSAA sample count and new extent
-    createDepthResources(ctx) catch return false;
-
-    // 3. Recreate MSAA color resources with new extent
-    createMsaaColorResources(ctx) catch return false;
-
-    // 4. Recreate depth prepass framebuffers
-    if (createDepthFramebuffers(ctx) != c.VK_SUCCESS) return false;
-
-    // 5. Recreate forward framebuffers with 3 attachments
-    if (createFramebuffers(ctx) != c.VK_SUCCESS) return false;
-
-    // 6. Rebuild render graph with new extent and framebuffers
-    buildRenderGraph(ctx);
-
-    return true;
-}
-
-// ---- depth prepass callback ----
-// Called by the render graph. Renders all geometry depth-only (no color, no materials).
-
-fn depthPrepassCallback(cmd: c.VkCommandBuffer, user_data: ?*anyopaque) void {
-    const ctx: *VulkanContext = @ptrCast(@alignCast(user_data orelse return));
-    const frame = ctx.current_frame;
-
-    const viewport = c.VkViewport{
-        .x = 0.0,
-        .y = 0.0,
-        .width = @floatFromInt(ctx.swapchain_extent.width),
-        .height = @floatFromInt(ctx.swapchain_extent.height),
-        .minDepth = 0.0,
-        .maxDepth = 1.0,
-    };
-    const scissor = c.VkRect2D{
-        .offset = .{ .x = 0, .y = 0 },
-        .extent = ctx.swapchain_extent,
-    };
-    c.vkCmdSetViewport(cmd, 0, 1, &viewport);
-    c.vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-    // Bind depth pipeline and camera descriptor set (set 0 only — no materials needed)
-    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.depth_pipeline);
-    c.vkCmdBindDescriptorSets(
-        cmd,
-        c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-        ctx.pipeline_layout,
-        0,
-        1,
-        &ctx.descriptor_sets_0[frame],
-        0,
-        null,
-    );
-
-    // Iterate draw list — vertex/index + model matrix push constant, no material binding
-    var i: u32 = 0;
-    while (i < ctx.draw_count) : (i += 1) {
-        const dc = &ctx.draw_list[i];
-        const offset: u64 = 0;
-        c.vkCmdBindVertexBuffers(cmd, 0, 1, &dc.vertex_buffer, &offset);
-        c.vkCmdBindIndexBuffer(cmd, dc.index_buffer, 0, c.VK_INDEX_TYPE_UINT32);
-        c.vkCmdPushConstants(cmd, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &dc.model_matrix);
-        c.vkCmdDrawIndexed(cmd, dc.index_count, 1, 0, 0, 0);
-    }
-}
-
-// ---- forward pass callback ----
-// Called by the render graph during execute(). Records all queued draw calls.
-
-fn forwardPassCallback(cmd: c.VkCommandBuffer, user_data: ?*anyopaque) void {
-    const ctx: *VulkanContext = @ptrCast(@alignCast(user_data orelse return));
-    const frame = ctx.current_frame;
-
-    // Dynamic viewport and scissor
-    const viewport = c.VkViewport{
-        .x = 0.0,
-        .y = 0.0,
-        .width = @floatFromInt(ctx.swapchain_extent.width),
-        .height = @floatFromInt(ctx.swapchain_extent.height),
-        .minDepth = 0.0,
-        .maxDepth = 1.0,
-    };
-    const scissor = c.VkRect2D{
-        .offset = .{ .x = 0, .y = 0 },
-        .extent = ctx.swapchain_extent,
-    };
-    c.vkCmdSetViewport(cmd, 0, 1, &viewport);
-    c.vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-    // Bind forward pipeline and per-frame descriptor set (set 0: camera + lights)
-    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
-    c.vkCmdBindDescriptorSets(
-        cmd,
-        c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-        ctx.pipeline_layout,
-        0,
-        1,
-        &ctx.descriptor_sets_0[frame],
-        0,
-        null,
-    );
-
-    // Execute queued draw calls
-    var i: u32 = 0;
-    while (i < ctx.draw_count) : (i += 1) {
-        const dc = &ctx.draw_list[i];
-
-        // Bind material descriptor set (set 1)
-        c.vkCmdBindDescriptorSets(
-            cmd,
-            c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            ctx.pipeline_layout,
-            1,
-            1,
-            &dc.material_descriptor_set,
-            0,
-            null,
-        );
-
-        const offset: u64 = 0;
-        c.vkCmdBindVertexBuffers(cmd, 0, 1, &dc.vertex_buffer, &offset);
-        c.vkCmdBindIndexBuffer(cmd, dc.index_buffer, 0, c.VK_INDEX_TYPE_UINT32);
-        c.vkCmdPushConstants(cmd, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &dc.model_matrix);
-        c.vkCmdDrawIndexed(cmd, dc.index_count, 1, 0, 0, 0);
-    }
-}
-
-// ---- render graph setup ----
-// Builds the render graph with a single forward pass.
-// Called from Renderer.create and recreateSwapchain.
-
-fn buildRenderGraph(ctx: *VulkanContext) void {
-    ctx.graph.reset();
-
-    // Pass 0: depth prepass — depth-only, populates depth buffer
-    const depth_clear = [1]c.VkClearValue{
-        .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
-    };
-    const depth_pass = ctx.graph.addGraphicsPass(.{
-        .render_pass = ctx.depth_render_pass,
-        .framebuffers = &ctx.depth_framebuffers,
-        .extent = ctx.swapchain_extent,
-        .clear_values = depth_clear[0..],
-        .execute_fn = &depthPrepassCallback,
-        .user_data = null, // set per-frame in endFrame
-    });
-
-    // Barrier: depth writes from prepass must be visible to forward pass depth reads
-    ctx.graph.addImageBarrier(depth_pass, .{
-        .image = ctx.depth_image,
-        .old_layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        .new_layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        .src_stage = c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-        .dst_stage = c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .src_access = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        .dst_access = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-        .aspect_mask = c.VK_IMAGE_ASPECT_DEPTH_BIT,
-    });
-
-    // Pass 1: forward shading — color + depth read (EQUAL test, zero overdraw)
-    const fwd_clear = [3]c.VkClearValue{
-        ctx.clear_color,
-        .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } }, // unused (LOAD)
-        ctx.clear_color, // unused (DONT_CARE)
-    };
-    _ = ctx.graph.addGraphicsPass(.{
-        .render_pass = ctx.render_pass,
-        .framebuffers = &ctx.framebuffers,
-        .extent = ctx.swapchain_extent,
-        .clear_values = fwd_clear[0..],
-        .execute_fn = &forwardPassCallback,
-        .user_data = null, // set per-frame in endFrame
-    });
-}
-
 // ---- bridge: Renderer struct ----
 
 pub const Renderer = struct {
@@ -2535,7 +653,7 @@ pub const Renderer = struct {
         ctx.vma_initialized = true;
 
         // MSAA sample count (after physical device selection, before resource creation)
-        ctx.msaa_samples = getMaxUsableSampleCount(ctx.physical_device);
+        ctx.msaa_samples = pipeline.getMaxUsableSampleCount(ctx.physical_device);
 
         // swapchain
         if (createSwapchain(&ctx) != c.VK_SUCCESS) {
@@ -2543,32 +661,32 @@ pub const Renderer = struct {
         }
 
         // depth buffer with MSAA (requires VMA + swapchain extent + msaa_samples)
-        createDepthResources(&ctx) catch {
+        pipeline.createDepthResources(&ctx) catch {
             return VkBridgeError.VulkanFailed;
         };
 
         // MSAA color attachment (requires VMA + swapchain extent + swapchain_format + msaa_samples)
-        createMsaaColorResources(&ctx) catch {
+        pipeline.createMsaaColorResources(&ctx) catch {
             return VkBridgeError.VulkanFailed;
         };
 
         // depth prepass render pass (depth-only, requires depth_format + msaa_samples)
-        if (createDepthRenderPass(&ctx) != c.VK_SUCCESS) {
+        if (pipeline.createDepthRenderPass(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
         // forward render pass with 3 attachments (requires depth_format + swapchain_format + msaa_samples)
-        if (createRenderPass(&ctx) != c.VK_SUCCESS) {
+        if (pipeline.createRenderPass(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
         // depth prepass framebuffers (depth-only, requires depth view + depth render pass)
-        if (createDepthFramebuffers(&ctx) != c.VK_SUCCESS) {
+        if (pipeline.createDepthFramebuffers(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
         // forward framebuffers with 3 attachments (requires MSAA color view + depth view + render pass)
-        if (createFramebuffers(&ctx) != c.VK_SUCCESS) {
+        if (pipeline.createFramebuffers(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
@@ -2578,30 +696,30 @@ pub const Renderer = struct {
         }
 
         // UBOs (requires VMA + command pool for initial staging)
-        createUBOs(&ctx) catch {
+        descriptors.createUBOs(&ctx) catch {
             return VkBridgeError.VulkanFailed;
         };
 
         // descriptor set layouts
-        if (createDescriptorSetLayouts(&ctx) != c.VK_SUCCESS) {
+        if (descriptors.createDescriptorSetLayouts(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
         // descriptor pool + per-frame sets (requires UBOs)
-        if (createDescriptorPool(&ctx) != c.VK_SUCCESS) {
+        if (descriptors.createDescriptorPool(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
-        if (allocatePerFrameDescriptorSets(&ctx) != c.VK_SUCCESS) {
+        if (descriptors.allocatePerFrameDescriptorSets(&ctx) != c.VK_SUCCESS) {
             return VkBridgeError.VulkanFailed;
         }
 
         // forward graphics pipeline (requires render pass + descriptor set layouts)
-        createGraphicsPipeline(&ctx) catch {
+        pipeline.createGraphicsPipeline(&ctx) catch {
             return VkBridgeError.VulkanFailed;
         };
 
         // depth prepass pipeline (requires depth render pass + pipeline layout)
-        createDepthPipeline(&ctx) catch {
+        pipeline.createDepthPipeline(&ctx) catch {
             return VkBridgeError.VulkanFailed;
         };
 
@@ -2611,13 +729,13 @@ pub const Renderer = struct {
         }
 
         // default 1x1 white texture (used for materials with no texture assigned)
-        ctx.default_texture = textureCreateDefault(&ctx) catch {
+        ctx.default_texture = resources.textureCreateDefault(&ctx) catch {
             return VkBridgeError.VulkanFailed;
         };
         ctx.default_texture_initialized = true;
 
         // build render graph (single forward pass for now)
-        buildRenderGraph(&ctx);
+        rendergraph.buildRenderGraph(&ctx);
 
         return Renderer{ .ctx = ctx };
     }
@@ -2626,7 +744,7 @@ pub const Renderer = struct {
         _ = c.vkDeviceWaitIdle(self.ctx.device);
 
         if (self.ctx.default_texture_initialized) {
-            textureFree(&self.ctx, &self.ctx.default_texture);
+            resources.textureFree(&self.ctx, &self.ctx.default_texture);
             self.ctx.default_texture_initialized = false;
         }
 
@@ -2645,11 +763,11 @@ pub const Renderer = struct {
         if (self.ctx.descriptor_set_layout_0 != null) c.vkDestroyDescriptorSetLayout(self.ctx.device, self.ctx.descriptor_set_layout_0, null);
         if (self.ctx.descriptor_set_layout_1 != null) c.vkDestroyDescriptorSetLayout(self.ctx.device, self.ctx.descriptor_set_layout_1, null);
 
-        destroyUBOs(&self.ctx);
+        descriptors.destroyUBOs(&self.ctx);
 
         if (self.ctx.command_pool != null) c.vkDestroyCommandPool(self.ctx.device, self.ctx.command_pool, null);
 
-        cleanupSwapchain(&self.ctx);
+        rendergraph.cleanupSwapchain(&self.ctx);
 
         if (self.ctx.render_pass != null) c.vkDestroyRenderPass(self.ctx.device, self.ctx.render_pass, null);
         if (self.ctx.depth_render_pass != null) c.vkDestroyRenderPass(self.ctx.device, self.ctx.depth_render_pass, null);
@@ -2671,7 +789,7 @@ pub const Renderer = struct {
         const frame = ctx.current_frame;
 
         // Pack and flush pending light state to this frame's SSBO
-        flushLightSSBO(ctx, frame);
+        lighting.flushLightSSBO(ctx, frame);
 
         // wait for previous frame using this slot to finish
         _ = c.vkWaitForFences(ctx.device, 1, &ctx.in_flight_fences[frame], c.VK_TRUE, std.math.maxInt(u64));
@@ -2688,7 +806,7 @@ pub const Renderer = struct {
         );
 
         if (result == c.VK_ERROR_OUT_OF_DATE_KHR) {
-            if (!recreateSwapchain(ctx)) return false;
+            if (!rendergraph.recreateSwapchain(ctx)) return false;
             return false;
         }
         if (result != c.VK_SUCCESS and result != c.VK_SUBOPTIMAL_KHR) return false;
@@ -2761,7 +879,7 @@ pub const Renderer = struct {
 
         if (result == c.VK_ERROR_OUT_OF_DATE_KHR or result == c.VK_SUBOPTIMAL_KHR or ctx.framebuffer_resized) {
             ctx.framebuffer_resized = false;
-            _ = recreateSwapchain(ctx);
+            _ = rendergraph.recreateSwapchain(ctx);
         }
 
         ctx.current_frame = (frame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -2798,9 +916,9 @@ pub const Renderer = struct {
     // draw — bridge-callable: queues a Mesh for rendering with the given Material and model matrix.
     // Draw calls are collected into a list and executed by the render graph's forward pass.
     pub fn draw(self: *Renderer, mesh: *const Mesh, material: *const Material, model_matrix: *const anyopaque) void {
-        if (self.ctx.draw_count >= MAX_DRAW_CALLS) return;
+        if (self.ctx.draw_count >= rendergraph.MAX_DRAW_CALLS) return;
         const model_mat: *const [16]f32 = @ptrCast(@alignCast(model_matrix));
-        self.ctx.draw_list[self.ctx.draw_count] = DrawCall{
+        self.ctx.draw_list[self.ctx.draw_count] = rendergraph.DrawCall{
             .vertex_buffer = mesh.mesh_buffers.vertex_buffer,
             .index_buffer = mesh.mesh_buffers.index_buffer,
             .index_count = mesh.mesh_buffers.index_count,
@@ -2818,7 +936,7 @@ pub const Renderer = struct {
     pub fn createMesh(self: *Renderer, vertices: *const anyopaque, vertex_byte_size: u32, indices: *const anyopaque, index_count: u32) anyerror!Mesh {
         const vert_ptr: [*]const u8 = @ptrCast(vertices);
         const idx_ptr: [*]const u32 = @ptrCast(@alignCast(indices));
-        const buffers = try createMeshBuffers(&self.ctx, vert_ptr, vertex_byte_size, idx_ptr, index_count);
+        const buffers = try resources.createMeshBuffers(&self.ctx, vert_ptr, vertex_byte_size, idx_ptr, index_count);
         return Mesh{ .mesh_buffers = buffers };
     }
 
@@ -2837,13 +955,13 @@ pub const Renderer = struct {
         const len = @min(path.len, path_buf.len - 1);
         @memcpy(path_buf[0..len], path[0..len]);
         path_buf[len] = 0;
-        return textureLoad(&self.ctx, @ptrCast(&path_buf));
+        return resources.textureLoad(&self.ctx, @ptrCast(&path_buf));
     }
 
     // destroyTexture: bridge func — releases texture GPU resources.
     // Takes const pointer to match bridge safety rules; casts to mutable internally.
     pub fn destroyTexture(self: *Renderer, tex: *const Texture) void {
-        textureFree(&self.ctx, @constCast(tex));
+        resources.textureFree(&self.ctx, @constCast(tex));
     }
 
     // getDefaultTexture: returns a pointer to the built-in 1x1 white texture.
@@ -2868,22 +986,22 @@ pub const Renderer = struct {
         shininess: f32,
         texture: *const Texture,
     ) anyerror!Material {
-        return materialCreate(&self.ctx, diffuse_r, diffuse_g, diffuse_b, diffuse_a, specular, shininess, texture);
+        return resources.materialCreate(&self.ctx, diffuse_r, diffuse_g, diffuse_b, diffuse_a, specular, shininess, texture);
     }
 
     // destroyMaterial: bridge func — releases material GPU resources.
     // Takes const pointer to match bridge safety rules; casts to mutable internally.
     pub fn destroyMaterial(self: *Renderer, mat: *const Material) void {
-        materialFree(&self.ctx, @constCast(mat));
+        resources.materialFree(&self.ctx, @constCast(mat));
     }
 
     // setDirLight: sets a directional light at the given index (0..3).
     // dir_x/y/z: normalized direction the light travels (points from light source toward scene)
     // r/g/b: light color (1.0, 1.0, 1.0 = white)
     pub fn setDirLight(self: *Renderer, index: u32, dir_x: f32, dir_y: f32, dir_z: f32, r: f32, g: f32, b: f32) void {
-        if (index >= MAX_DIR_LIGHTS) return;
-        self.ctx.pending_dir_lights[index] = LightData{
-            .direction_type = [4]f32{ dir_x, dir_y, dir_z, LIGHT_TYPE_DIRECTIONAL },
+        if (index >= lighting.MAX_DIR_LIGHTS) return;
+        self.ctx.pending_dir_lights[index] = lighting.LightData{
+            .direction_type = [4]f32{ dir_x, dir_y, dir_z, lighting.LIGHT_TYPE_DIRECTIONAL },
             .color = [4]f32{ r, g, b, 0.0 },
         };
     }
@@ -2905,10 +1023,10 @@ pub const Renderer = struct {
         linear: f32,
         quadratic: f32,
     ) void {
-        if (index >= MAX_POINT_LIGHTS) return;
-        self.ctx.pending_point_lights[index] = LightData{
+        if (index >= lighting.MAX_POINT_LIGHTS) return;
+        self.ctx.pending_point_lights[index] = lighting.LightData{
             .position_range = [4]f32{ pos_x, pos_y, pos_z, 0.0 },
-            .direction_type = [4]f32{ 0.0, 0.0, 0.0, LIGHT_TYPE_POINT },
+            .direction_type = [4]f32{ 0.0, 0.0, 0.0, lighting.LIGHT_TYPE_POINT },
             .color = [4]f32{ r, g, b, 0.0 },
             .attenuation = [4]f32{ constant, linear, quadratic, 0.0 },
         };
@@ -2936,10 +1054,10 @@ pub const Renderer = struct {
         outer_angle: f32,
         range: f32,
     ) void {
-        if (index >= MAX_SPOT_LIGHTS) return;
-        self.ctx.pending_spot_lights[index] = LightData{
+        if (index >= lighting.MAX_SPOT_LIGHTS) return;
+        self.ctx.pending_spot_lights[index] = lighting.LightData{
             .position_range = [4]f32{ pos_x, pos_y, pos_z, range },
-            .direction_type = [4]f32{ dir_x, dir_y, dir_z, LIGHT_TYPE_SPOT },
+            .direction_type = [4]f32{ dir_x, dir_y, dir_z, lighting.LIGHT_TYPE_SPOT },
             .color = [4]f32{ r, g, b, 0.0 },
             .attenuation = [4]f32{ 1.0, 0.09, 0.032, 0.0 },
             .spot_params = [4]f32{ @cos(inner_angle), @cos(outer_angle), 0.0, 0.0 },
@@ -2949,9 +1067,9 @@ pub const Renderer = struct {
     // setLightCounts: sets how many directional, point, and spot lights are active.
     // Must be called after setting lights to activate them.
     pub fn setLightCounts(self: *Renderer, num_dir: u32, num_point: u32, num_spot: u32) void {
-        self.ctx.num_dir_lights = @min(num_dir, MAX_DIR_LIGHTS);
-        self.ctx.num_point_lights = @min(num_point, MAX_POINT_LIGHTS);
-        self.ctx.num_spot_lights = @min(num_spot, MAX_SPOT_LIGHTS);
+        self.ctx.num_dir_lights = @min(num_dir, lighting.MAX_DIR_LIGHTS);
+        self.ctx.num_point_lights = @min(num_point, lighting.MAX_POINT_LIGHTS);
+        self.ctx.num_spot_lights = @min(num_spot, lighting.MAX_SPOT_LIGHTS);
     }
 };
 
