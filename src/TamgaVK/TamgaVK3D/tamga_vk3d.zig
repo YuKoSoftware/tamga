@@ -23,6 +23,14 @@ pub const MeshBuffers = resources.MeshBuffers;
 pub const Texture = resources.Texture;
 pub const Material = resources.Material;
 
+// ---- resource ID types ----
+// Lightweight typed indices into the renderer's internal slot maps.
+// Created by Renderer methods, passed back to draw/destroy calls.
+
+pub const MeshId = struct { id: u32 };
+pub const TextureId = struct { id: u32 };
+pub const MaterialId = struct { id: u32 };
+
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 
 // ---- error types for bridge ----
@@ -913,69 +921,72 @@ pub const Renderer = struct {
         @memcpy(self.ctx.camera_mapped[frame][0..@sizeOf(CameraUBO)], std.mem.asBytes(&ubo));
     }
 
-    // draw — bridge-callable: queues a Mesh for rendering with the given Material and model matrix.
+    // draw — bridge-callable: queues a mesh for rendering with the given material and model matrix.
     // Draw calls are collected into a list and executed by the render graph's forward pass.
-    pub fn draw(self: *Renderer, mesh: *const Mesh, material: *const Material, model_matrix: *const anyopaque) void {
+    pub fn draw(self: *Renderer, mesh_id: MeshId, material_id: MaterialId, model_matrix: *const anyopaque) void {
         if (self.ctx.draw_count >= rendergraph.MAX_DRAW_CALLS) return;
+        const mesh = resources.getMesh(mesh_id.id) orelse return;
+        const mat = resources.getMaterial(material_id.id) orelse return;
         const model_mat: *const [16]f32 = @ptrCast(@alignCast(model_matrix));
         self.ctx.draw_list[self.ctx.draw_count] = rendergraph.DrawCall{
-            .vertex_buffer = mesh.mesh_buffers.vertex_buffer,
-            .index_buffer = mesh.mesh_buffers.index_buffer,
-            .index_count = mesh.mesh_buffers.index_count,
-            .material_descriptor_set = material.descriptor_set,
+            .vertex_buffer = mesh.vertex_buffer,
+            .index_buffer = mesh.index_buffer,
+            .index_count = mesh.index_count,
+            .material_descriptor_set = mat.descriptor_set,
             .model_matrix = model_mat.*,
         };
         self.ctx.draw_count += 1;
     }
 
-    // createMesh: bridge func — allocates GPU vertex + index buffers via VMA.
+    // createMesh: bridge func — allocates GPU vertex + index buffers via VMA, returns a MeshId.
     // vertices: raw byte pointer to packed D-05 vertex data
     // vertex_byte_size: total byte count of vertex array
     // indices: raw byte pointer to u32 index array
     // index_count: number of u32 indices
-    pub fn createMesh(self: *Renderer, vertices: *const anyopaque, vertex_byte_size: u32, indices: *const anyopaque, index_count: u32) anyerror!Mesh {
+    pub fn createMesh(self: *Renderer, vertices: *const anyopaque, vertex_byte_size: u32, indices: *const anyopaque, index_count: u32) anyerror!MeshId {
         const vert_ptr: [*]const u8 = @ptrCast(vertices);
         const idx_ptr: [*]const u32 = @ptrCast(@alignCast(indices));
-        const buffers = try resources.createMeshBuffers(&self.ctx, vert_ptr, vertex_byte_size, idx_ptr, index_count);
-        return Mesh{ .mesh_buffers = buffers };
+        const mesh_buffers = try resources.createMeshBuffers(&self.ctx, vert_ptr, vertex_byte_size, idx_ptr, index_count);
+        const slot = resources.allocMeshSlot(mesh_buffers) orelse return VkBridgeError.VulkanFailed;
+        return MeshId{ .id = slot };
     }
 
     // destroyMesh: bridge func — releases vertex and index buffer allocations.
-    pub fn destroyMesh(self: *Renderer, mesh: *const Mesh) void {
-        self.ctx.vma_ctx.destroyBuffer(mesh.mesh_buffers.vertex_buffer, mesh.mesh_buffers.vertex_allocation);
-        self.ctx.vma_ctx.destroyBuffer(mesh.mesh_buffers.index_buffer, mesh.mesh_buffers.index_allocation);
+    pub fn destroyMesh(self: *Renderer, id: MeshId) void {
+        if (resources.getMesh(id.id)) |mesh| {
+            self.ctx.vma_ctx.destroyBuffer(mesh.vertex_buffer, mesh.vertex_allocation);
+            self.ctx.vma_ctx.destroyBuffer(mesh.index_buffer, mesh.index_allocation);
+            resources.freeMeshSlot(id.id);
+        }
     }
 
-    // loadTexture: bridge func — loads a texture from a PNG/JPG file via stb_image.
+    // loadTexture: bridge func — loads a texture from a PNG/JPG file via stb_image, returns a TextureId.
     // path: Orhon String slice ([]const u8) — converted to null-terminated for stbi_load.
-    pub fn loadTexture(self: *Renderer, path: []const u8) anyerror!Texture {
+    pub fn loadTexture(self: *Renderer, path: []const u8) anyerror!TextureId {
         // Convert Orhon String slice to null-terminated C string for stbi_load.
         // Use a stack buffer for paths up to 1023 bytes (covers all practical file paths).
         var path_buf: [1024]u8 = undefined;
         const len = @min(path.len, path_buf.len - 1);
         @memcpy(path_buf[0..len], path[0..len]);
         path_buf[len] = 0;
-        return resources.textureLoad(&self.ctx, @ptrCast(&path_buf));
+        const tex = try resources.textureLoad(&self.ctx, @ptrCast(&path_buf));
+        const slot = resources.allocTextureSlot(tex) orelse return VkBridgeError.VulkanFailed;
+        return TextureId{ .id = slot };
     }
 
-    // destroyTexture: bridge func — releases texture GPU resources.
-    // Takes const pointer to match bridge safety rules; casts to mutable internally.
-    pub fn destroyTexture(self: *Renderer, tex: *const Texture) void {
-        resources.textureFree(&self.ctx, @constCast(tex));
+    // destroyTexture: bridge func — releases texture GPU resources by ID.
+    pub fn destroyTexture(self: *Renderer, id: TextureId) void {
+        if (resources.getTexture(id.id)) |tex| {
+            resources.textureFree(&self.ctx, tex);
+            resources.freeTextureSlot(id.id);
+        }
     }
 
-    // getDefaultTexture: returns a pointer to the built-in 1x1 white texture.
-    // Used to create untextured materials (material color shows directly).
-    pub fn getDefaultTexture(self: *Renderer) *Texture {
-        return &self.ctx.default_texture;
-    }
-
-    // createMaterial: bridge func — creates a material with Phong properties and a texture.
+    // createMaterial: bridge func — creates a material with Phong properties and a texture, returns a MaterialId.
     // diffuse_r/g/b/a: RGBA diffuse color multiplier (1,1,1,1 = texture color unmodified)
     // specular: specular intensity (0.0 = no specular, 1.0 = full)
     // shininess: Phong shininess exponent (e.g. 32.0 = moderately shiny)
-    // texture: passed by value — Orhon compiler does not auto-borrow bridge structs in
-    //   error-union-returning calls; value copy is safe since Texture fields are GPU handles.
+    // texture_id: ID of a previously loaded texture (from loadTexture)
     pub fn createMaterial(
         self: *Renderer,
         diffuse_r: f32,
@@ -984,15 +995,20 @@ pub const Renderer = struct {
         diffuse_a: f32,
         specular: f32,
         shininess: f32,
-        texture: *const Texture,
-    ) anyerror!Material {
-        return resources.materialCreate(&self.ctx, diffuse_r, diffuse_g, diffuse_b, diffuse_a, specular, shininess, texture);
+        texture_id: TextureId,
+    ) anyerror!MaterialId {
+        const tex = resources.getTexture(texture_id.id) orelse return VkBridgeError.VulkanFailed;
+        const mat = try resources.materialCreate(&self.ctx, diffuse_r, diffuse_g, diffuse_b, diffuse_a, specular, shininess, tex);
+        const slot = resources.allocMaterialSlot(mat) orelse return VkBridgeError.VulkanFailed;
+        return MaterialId{ .id = slot };
     }
 
-    // destroyMaterial: bridge func — releases material GPU resources.
-    // Takes const pointer to match bridge safety rules; casts to mutable internally.
-    pub fn destroyMaterial(self: *Renderer, mat: *const Material) void {
-        resources.materialFree(&self.ctx, @constCast(mat));
+    // destroyMaterial: bridge func — releases material GPU resources by ID.
+    pub fn destroyMaterial(self: *Renderer, id: MaterialId) void {
+        if (resources.getMaterial(id.id)) |mat| {
+            resources.materialFree(&self.ctx, mat);
+            resources.freeMaterialSlot(id.id);
+        }
     }
 
     // setDirLight: sets a directional light at the given index (0..3).
@@ -1073,10 +1089,3 @@ pub const Renderer = struct {
     }
 };
 
-// ---- Mesh bridge struct ----
-// Wraps MeshBuffers. Created/destroyed via Renderer.createMesh and Renderer.destroyMesh.
-// Passed as const &Mesh to Renderer.draw.
-
-pub const Mesh = struct {
-    mesh_buffers: MeshBuffers,
-};

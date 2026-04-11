@@ -556,3 +556,75 @@ pub fn materialFree(ctx: *VulkanContext, mat: *Material) void {
     ctx.vma_ctx.destroyBuffer(mat.material_ubo.buffer, mat.material_ubo.allocation);
     // descriptor set is freed with the pool — no explicit free needed
 }
+
+// ---- slot maps ----
+// Fixed-size arrays keyed by u32 ID. IDs are returned to Orhon as MeshId/TextureId/MaterialId.
+// Null slots mean free; allocation is a linear scan for the first free slot.
+
+pub const MAX_MESHES: u32 = 256;
+pub const MAX_TEXTURES: u32 = 256;
+pub const MAX_MATERIALS: u32 = 256;
+
+pub var mesh_slots: [MAX_MESHES]?MeshBuffers = [_]?MeshBuffers{null} ** MAX_MESHES;
+pub var texture_slots: [MAX_TEXTURES]?Texture = [_]?Texture{null} ** MAX_TEXTURES;
+pub var material_slots: [MAX_MATERIALS]?Material = [_]?Material{null} ** MAX_MATERIALS;
+
+pub fn allocMeshSlot(mesh: MeshBuffers) ?u32 {
+    for (&mesh_slots, 0..) |*slot, i| {
+        if (slot.* == null) {
+            slot.* = mesh;
+            return @intCast(i);
+        }
+    }
+    return null;
+}
+
+pub fn freeMeshSlot(id: u32) void {
+    if (id < MAX_MESHES) mesh_slots[id] = null;
+}
+
+pub fn getMesh(id: u32) ?*MeshBuffers {
+    if (id >= MAX_MESHES) return null;
+    if (mesh_slots[id]) |*m| return m;
+    return null;
+}
+
+pub fn allocTextureSlot(tex: Texture) ?u32 {
+    for (&texture_slots, 0..) |*slot, i| {
+        if (slot.* == null) {
+            slot.* = tex;
+            return @intCast(i);
+        }
+    }
+    return null;
+}
+
+pub fn freeTextureSlot(id: u32) void {
+    if (id < MAX_TEXTURES) texture_slots[id] = null;
+}
+
+pub fn getTexture(id: u32) ?*Texture {
+    if (id >= MAX_TEXTURES) return null;
+    if (texture_slots[id]) |*t| return t;
+    return null;
+}
+
+pub fn allocMaterialSlot(mat: Material) ?u32 {
+    for (&material_slots, 0..) |*slot, i| {
+        if (slot.* == null) {
+            slot.* = mat;
+            return @intCast(i);
+        }
+    }
+    return null;
+}
+
+pub fn freeMaterialSlot(id: u32) void {
+    if (id < MAX_MATERIALS) material_slots[id] = null;
+}
+
+pub fn getMaterial(id: u32) ?*Material {
+    if (id >= MAX_MATERIALS) return null;
+    if (material_slots[id]) |*m| return m;
+    return null;
+}
