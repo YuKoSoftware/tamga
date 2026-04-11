@@ -1,4 +1,4 @@
-module tamga_framework
+module tamga
 
 import tamga_sdl3
 import std::console
@@ -28,7 +28,7 @@ pub func run_sdl3_test() void {
     defer { win.destroy() }
 
     // WIN-13: Get opaque WindowHandle (D-07, D-08)
-    const handle = win.getHandle()
+    const win_handle = win.getHandle()
     console.println("WindowHandle obtained: ok")
 
     // WIN-09: HiDPI pixel dimensions

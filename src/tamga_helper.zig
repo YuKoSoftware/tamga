@@ -64,26 +64,26 @@ const proj_matrix = [16]f32{
 // ---- Bridge export functions ----
 // Called from test_vulkan.orh via `bridge func` declarations.
 
-pub fn getTriangleVertices() *const anyopaque {
-    return @ptrCast(&triangle_vertices);
+pub fn getTriangleVertices() usize {
+    return @intFromPtr(&triangle_vertices);
 }
 
-pub fn getTriangleIndices() *const anyopaque {
-    return @ptrCast(&triangle_indices);
+pub fn getTriangleIndices() usize {
+    return @intFromPtr(&triangle_indices);
 }
 
-pub fn getViewMatrix() *const anyopaque {
-    return @ptrCast(&view_matrix);
+pub fn getViewMatrix() usize {
+    return @intFromPtr(&view_matrix);
 }
 
-pub fn getProjMatrix() *const anyopaque {
-    return @ptrCast(&proj_matrix);
+pub fn getProjMatrix() usize {
+    return @intFromPtr(&proj_matrix);
 }
 
-pub fn getCameraPos() *const anyopaque {
-    return @ptrCast(&camera_pos);
+pub fn getCameraPos() usize {
+    return @intFromPtr(&camera_pos);
 }
 
-pub fn getIdentityMatrix() *const anyopaque {
-    return @ptrCast(&identity_matrix);
+pub fn getIdentityMatrix() usize {
+    return @intFromPtr(&identity_matrix);
 }

@@ -45,24 +45,24 @@ pub struct Loop {
     // Converts fixed_hz to nanoseconds per step for integer arithmetic.
     pub func create(config: LoopConfig) Loop {
         const step_ns = @cast(u64, 1000000000.0 / config.fixed_hz)
-        return Loop(
+        return Loop{
             config:        config,
             running:       false,
             accumulator:   0,
             last_time:     0,
             fixed_step_ns: step_ns
-        )
+        }
     }
 
     // Run the frame loop until stop() is called or a quit/window-close event is received.
     // Blocks until the loop exits.
     pub func run(self: mut& Loop) void {
         self.running  = true
-        self.last_time    = getTicksNS()
+        self.last_time    = tamga_sdl3.getTicksNS()
         self.accumulator  = 0
 
         while(self.running) {
-            const now = getTicksNS()
+            const now = tamga_sdl3.getTicksNS()
             var frame_time = now - self.last_time
 
             // Clamp to 250ms — prevents spiral of death when frame takes too long

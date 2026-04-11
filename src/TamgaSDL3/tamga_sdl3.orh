@@ -9,14 +9,16 @@ module tamga_sdl3
 
 pub handle WindowHandle
 
-// ---- WindowFlags bitfield ----
-// Replaces raw u64 SDL3 constants. Callers use:
-//   var flags = WindowFlags{}
-//   flags.set(WindowFlags.get("Resizable"))
-//   flags.set(WindowFlags.get("Vulkan"))
+// ---- Window flag constants ----
+// SDL3 window flags as u64 values. Combine with bitwise OR.
+// Note: std::bitfield Bitfield() compt function expects a Zig tuple literal
+// that Orhon cannot express yet. Using plain constants until GAP-003 is resolved.
 
-use std::bitfield
-pub const WindowFlags: type = Bitfield(u64, ("Resizable", "Fullscreen", "Borderless", "Vulkan", "HighPixelDensity"))
+pub const WINDOW_RESIZABLE: u64 = 32
+pub const WINDOW_FULLSCREEN: u64 = 1
+pub const WINDOW_BORDERLESS: u64 = 16
+pub const WINDOW_VULKAN: u64 = 268435456
+pub const WINDOW_HIGH_PIXEL_DENSITY: u64 = 8192
 
 // ---- Scancode enum ----
 // SDL3 scancode integers as explicit enum values.
@@ -151,7 +153,7 @@ pub struct GamepadDisconnectedEvent {
 }
 
 pub struct TextInputEvent {
-    pub text: String
+    pub text: str
     pub timestamp: u64
 }
 
@@ -206,7 +208,7 @@ const TAG_WINDOW_CLOSE:         u8 = 15
 //       }
 //   }
 
-pub const Event: type = NullUnion((QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent))
+pub const Event: type = (null | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent)
 
 // ---- pollEvent ----
 // Polls for the next SDL3 event.
@@ -216,56 +218,57 @@ pub const Event: type = NullUnion((QuitEvent | KeyDownEvent | KeyUpEvent | Mouse
 // RawEvent and its getter methods are auto-mapped from tamga_sdl3.zig.
 // GAP-002: struct fields are not auto-mapped — getter methods are used instead.
 
-pub func pollEvent() Event {
-    var raw = tamga_sdl3.createRawEvent()
-    if(!tamga_sdl3.pollRawEvent(raw)) { return null }
+pub func pollEvent() (null | QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent) {
+    const raw_opt = tamga_sdl3.pollEvent_raw()
+    if(raw_opt is null) { return null }
+    const raw = raw_opt.value
     const tag = raw.getTag()
     const ts = raw.getTimestamp()
     if(tag == TAG_NONE) { return null }
     if(tag == TAG_QUIT) {
-        return QuitEvent(timestamp: ts)
+        return QuitEvent{timestamp: ts}
     }
     if(tag == TAG_KEY_DOWN) {
-        return KeyDownEvent(scancode: @cast(Scancode, raw.getKeyScancode()), repeat: raw.getKeyRepeat(), timestamp: ts)
+        return KeyDownEvent{scancode: @cast(Scancode, raw.getKeyScancode()), repeat: raw.getKeyRepeat(), timestamp: ts}
     }
     if(tag == TAG_KEY_UP) {
-        return KeyUpEvent(scancode: @cast(Scancode, raw.getKeyScancode()), repeat: raw.getKeyRepeat(), timestamp: ts)
+        return KeyUpEvent{scancode: @cast(Scancode, raw.getKeyScancode()), repeat: raw.getKeyRepeat(), timestamp: ts}
     }
     if(tag == TAG_MOUSE_MOTION) {
-        return MouseMotionEvent(x: raw.getMouseX(), y: raw.getMouseY(), xrel: raw.getMouseXRel(), yrel: raw.getMouseYRel(), timestamp: ts)
+        return MouseMotionEvent{x: raw.getMouseX(), y: raw.getMouseY(), xrel: raw.getMouseXRel(), yrel: raw.getMouseYRel(), timestamp: ts}
     }
     if(tag == TAG_MOUSE_BUTTON_DOWN) {
-        return MouseButtonEvent(button: @cast(MouseButton, raw.getMouseButton()), down: true, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
+        return MouseButtonEvent{button: @cast(MouseButton, raw.getMouseButton()), down: true, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts}
     }
     if(tag == TAG_MOUSE_BUTTON_UP) {
-        return MouseButtonEvent(button: @cast(MouseButton, raw.getMouseButton()), down: false, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts)
+        return MouseButtonEvent{button: @cast(MouseButton, raw.getMouseButton()), down: false, x: raw.getMouseX(), y: raw.getMouseY(), timestamp: ts}
     }
     if(tag == TAG_GAMEPAD_AXIS) {
-        return GamepadAxisEvent(gamepad_id: raw.getGamepadWhich(), axis: raw.getGamepadAxis(), value: raw.getGamepadAxisValue(), timestamp: ts)
+        return GamepadAxisEvent{gamepad_id: raw.getGamepadWhich(), axis: raw.getGamepadAxis(), value: raw.getGamepadAxisValue(), timestamp: ts}
     }
     if(tag == TAG_GAMEPAD_BUTTON_DOWN) {
-        return GamepadButtonEvent(gamepad_id: raw.getGamepadWhich(), button: raw.getGamepadButton(), timestamp: ts)
+        return GamepadButtonEvent{gamepad_id: raw.getGamepadWhich(), button: raw.getGamepadButton(), timestamp: ts}
     }
     if(tag == TAG_GAMEPAD_BUTTON_UP) {
-        return GamepadButtonEvent(gamepad_id: raw.getGamepadWhich(), button: raw.getGamepadButton(), timestamp: ts)
+        return GamepadButtonEvent{gamepad_id: raw.getGamepadWhich(), button: raw.getGamepadButton(), timestamp: ts}
     }
     if(tag == TAG_GAMEPAD_ADDED) {
-        return GamepadConnectedEvent(gamepad_id: raw.getGamepadWhich())
+        return GamepadConnectedEvent{gamepad_id: raw.getGamepadWhich()}
     }
     if(tag == TAG_GAMEPAD_REMOVED) {
-        return GamepadDisconnectedEvent(gamepad_id: raw.getGamepadWhich())
+        return GamepadDisconnectedEvent{gamepad_id: raw.getGamepadWhich()}
     }
     if(tag == TAG_TEXT_INPUT) {
-        return TextInputEvent(text: raw.getText(), timestamp: ts)
+        return TextInputEvent{text: raw.getText(), timestamp: ts}
     }
     if(tag == TAG_WINDOW_RESIZED) {
-        return WindowResizedEvent(width: raw.getWindowW(), height: raw.getWindowH(), timestamp: ts)
+        return WindowResizedEvent{width: raw.getWindowW(), height: raw.getWindowH(), timestamp: ts}
     }
     if(tag == TAG_WINDOW_PIXEL_RESIZED) {
-        return WindowPixelResizedEvent(width: raw.getPixelW(), height: raw.getPixelH(), timestamp: ts)
+        return WindowPixelResizedEvent{width: raw.getPixelW(), height: raw.getPixelH(), timestamp: ts}
     }
     if(tag == TAG_WINDOW_CLOSE) {
-        return WindowCloseEvent(timestamp: ts)
+        return WindowCloseEvent{timestamp: ts}
     }
     return null
 }

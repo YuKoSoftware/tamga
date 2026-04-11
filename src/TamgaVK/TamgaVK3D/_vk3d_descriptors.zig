@@ -1,5 +1,5 @@
 const std = @import("std");
-const vma = @import("tamga_vulkan_bridge");
+const vma = @import("tamga_vulkan");
 const c = @import("vulkan_c").c;
 const anchor = @import("tamga_vk3d.zig");
 const VulkanContext = anchor.VulkanContext;

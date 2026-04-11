@@ -1,6 +1,6 @@
 const std = @import("std");
-const vma = @import("tamga_vulkan_bridge");
-const rg = @import("tamga_vulkan_bridge");
+const vma = @import("tamga_vulkan");
+const rg = @import("tamga_vulkan");
 const c = @import("vulkan_c").c;
 // SDL types are imported via a local @cImport since SDL headers are only used in this module.
 const sdl = @cImport({
@@ -624,7 +624,7 @@ fn createSyncObjects(ctx: *VulkanContext) c.VkResult {
 pub const Renderer = struct {
     ctx: VulkanContext,
 
-    pub fn create(window_handle: @import("tamga_sdl3_bridge").WindowHandle, debug_mode: bool) anyerror!Renderer {
+    pub fn create(window_handle: @import("tamga_sdl3").WindowHandle, debug_mode: bool) anyerror!Renderer {
         var ctx = VulkanContext{};
 
         // WindowHandle is now a plain *anyopaque pointer (type alias).
@@ -908,11 +908,11 @@ pub const Renderer = struct {
     // view: pointer to 16 f32 values (column-major mat4)
     // proj: pointer to 16 f32 values (column-major mat4)
     // view_pos: pointer to 3 f32 values (vec3)
-    pub fn setCamera(self: *Renderer, view: *const anyopaque, proj: *const anyopaque, view_pos: *const anyopaque) void {
+    pub fn setCamera(self: *Renderer, view: usize, proj: usize, view_pos: usize) void {
         const frame = self.ctx.current_frame;
-        const view_mat: *const [16]f32 = @ptrCast(@alignCast(view));
-        const proj_mat: *const [16]f32 = @ptrCast(@alignCast(proj));
-        const vpos: *const [3]f32 = @ptrCast(@alignCast(view_pos));
+        const view_mat: *const [16]f32 = @ptrFromInt(view);
+        const proj_mat: *const [16]f32 = @ptrFromInt(proj);
+        const vpos: *const [3]f32 = @ptrFromInt(view_pos);
         const ubo = CameraUBO{
             .view = view_mat.*,
             .proj = proj_mat.*,
@@ -923,11 +923,11 @@ pub const Renderer = struct {
 
     // draw — bridge-callable: queues a mesh for rendering with the given material and model matrix.
     // Draw calls are collected into a list and executed by the render graph's forward pass.
-    pub fn draw(self: *Renderer, mesh_id: MeshId, material_id: MaterialId, model_matrix: *const anyopaque) void {
+    pub fn draw(self: *Renderer, mesh_id: MeshId, material_id: MaterialId, model_matrix: usize) void {
         if (self.ctx.draw_count >= rendergraph.MAX_DRAW_CALLS) return;
         const mesh = resources.getMesh(mesh_id.id) orelse return;
         const mat = resources.getMaterial(material_id.id) orelse return;
-        const model_mat: *const [16]f32 = @ptrCast(@alignCast(model_matrix));
+        const model_mat: *const [16]f32 = @ptrFromInt(model_matrix);
         self.ctx.draw_list[self.ctx.draw_count] = rendergraph.DrawCall{
             .vertex_buffer = mesh.vertex_buffer,
             .index_buffer = mesh.index_buffer,
@@ -943,9 +943,9 @@ pub const Renderer = struct {
     // vertex_byte_size: total byte count of vertex array
     // indices: raw byte pointer to u32 index array
     // index_count: number of u32 indices
-    pub fn createMesh(self: *Renderer, vertices: *const anyopaque, vertex_byte_size: u32, indices: *const anyopaque, index_count: u32) anyerror!MeshId {
-        const vert_ptr: [*]const u8 = @ptrCast(vertices);
-        const idx_ptr: [*]const u32 = @ptrCast(@alignCast(indices));
+    pub fn createMesh(self: *Renderer, vertices: usize, vertex_byte_size: u32, indices: usize, index_count: u32) anyerror!MeshId {
+        const vert_ptr: [*]const u8 = @ptrFromInt(vertices);
+        const idx_ptr: [*]const u32 = @ptrFromInt(indices);
         const mesh_buffers = try resources.createMeshBuffers(&self.ctx, vert_ptr, vertex_byte_size, idx_ptr, index_count);
         const slot = resources.allocMeshSlot(mesh_buffers) orelse return VkBridgeError.VulkanFailed;
         return MeshId{ .id = slot };

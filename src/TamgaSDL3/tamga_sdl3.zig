@@ -100,6 +100,14 @@ pub fn createRawEvent() RawEvent {
 
 // ---- event polling ----
 
+/// Polls for a raw event. Returns the event if one was available, or null if the queue is empty.
+/// This is the Orhon-friendly API — returns by value, no mutable borrow needed.
+pub fn pollEvent_raw() ?RawEvent {
+    var out: RawEvent = std.mem.zeroes(RawEvent);
+    if (!pollRawEvent(&out)) return null;
+    return out;
+}
+
 pub fn pollRawEvent(out: *RawEvent) bool {
     var ev: c.SDL_Event = undefined;
     if (!c.SDL_PollEvent(&ev)) return false;

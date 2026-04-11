@@ -1,4 +1,4 @@
-module tamga_framework
+module tamga
 
 #version = (0, 2, 0)
 #build   = exe
