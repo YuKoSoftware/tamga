@@ -1,0 +1,4 @@
+.{
+    .link = .{ "vulkan" },
+    .source = .{ "stb_image_impl.c" },
+}

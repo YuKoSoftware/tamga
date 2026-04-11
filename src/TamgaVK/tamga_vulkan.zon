@@ -1,0 +1,4 @@
+.{
+    .link = .{ "vulkan" },
+    .source = .{ "libs/vma_impl.cpp" },
+}
