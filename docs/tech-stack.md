@@ -11,11 +11,11 @@
 
 | Technology | Version | Purpose |
 |------------|---------|---------|
-| Vulkan | 1.2 minimum (target 1.3+) | GPU rendering for both 2D and 3D |
+| Vulkan | 1.3 (64-bit only) | GPU rendering for both 2D and 3D |
 | VMA | 3.x | GPU memory allocation (suballocation, alignment, defrag) |
 | SPIR-V | offline | Shaders compiled with glslangValidator to .spv, stored in assets/shaders/ |
 
-## Supporting C Libraries (via Zig bridge)
+## Supporting C Libraries (via Zig modules)
 
 | Library | Version | Purpose |
 |---------|---------|---------|
@@ -35,7 +35,7 @@
 
 ## Module-to-Library Mapping
 
-| Orhon Module | C Libraries Used | Bridge Sidecar |
+| Orhon Module | C Libraries Used | Zig Module |
 |---|---|---|
 | `tamga_sdl3` | SDL3 | `tamga_sdl3.zig` |
 | `tamga_vulkan` | Vulkan, VMA | `tamga_vulkan.zig` (allocator + render graph) |
@@ -55,4 +55,10 @@
 | GUI | Custom Orhon | Nuklear (C IMGUI) | Foreign code; pure Orhon preferred for language stress test |
 | Shaders | Offline SPIR-V (glslangValidator) | Runtime GLSL via shaderc | shaderc is large C++; offline has zero runtime cost |
 | Textures | stb_image | Pure Orhon PNG decoder | stb_image handles PNG/JPG/BMP/TGA in one header |
-| Vulkan version | 1.0 (upgrade to 1.2+ later) | 1.3 dynamic rendering | Prototype has VkRenderPass structures; mid-project migration disruptive |
+| Vulkan version | 1.3 | 1.0 (upgrade path) | 1.3 provides dynamic rendering, cleaner synchronization (sync2), and removes legacy render pass complexity |
+
+## C Interop Details
+
+**Module declarations via `.zon`:** C dependencies are declared via `.zon` files paired with each Zig module. The old `#cimport` directive no longer exists.
+
+**Handle types:** `pub handle` provides safe, nominally-typed opaque pointers at FFI boundaries.
