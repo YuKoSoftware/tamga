@@ -1,12 +1,9 @@
 module tamga_framework
 
-#name    = "tamga"
-#version = Version(0, 1, 5)
+#version = (0, 2, 0)
 #build   = exe
 
 import tamga_helper
-
-
 
 func main() void {
     run_vulkan_test()
