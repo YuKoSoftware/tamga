@@ -1,26 +1,22 @@
 module tamga_sdl3
 
-#name    = "tamga_sdl3"
-#version = Version(0, 1, 1)
+#version = (0, 2, 0)
 #build   = static
-#cimport = { name: "SDL3", include: "SDL3/SDL.h" }
 
-// ---- WindowHandle type alias ----
-// Named alias for the raw SDL window pointer.
+// ---- WindowHandle type ----
+// Opaque handle for the raw SDL window pointer.
 // Downstream modules import this type and never dereference or cast it.
 
-pub const WindowHandle: type = Ptr(u8)
+pub handle WindowHandle
 
 // ---- WindowFlags bitfield ----
-// Replaces raw u64 SDL3 constants. Callers use: WindowFlags(Resizable, Vulkan)
+// Replaces raw u64 SDL3 constants. Callers use:
+//   var flags = WindowFlags{}
+//   flags.set(WindowFlags.get("Resizable"))
+//   flags.set(WindowFlags.get("Vulkan"))
 
-pub bitfield(u64) WindowFlags {
-    Resizable
-    Fullscreen
-    Borderless
-    Vulkan
-    HighPixelDensity
-}
+use std::bitfield
+pub const WindowFlags: type = Bitfield(u64, ("Resizable", "Fullscreen", "Borderless", "Vulkan", "HighPixelDensity"))
 
 // ---- Scancode enum ----
 // SDL3 scancode integers as explicit enum values.
@@ -179,34 +175,6 @@ pub struct QuitEvent {
     pub timestamp: u64
 }
 
-// ---- RawEvent bridge struct ----
-// Internal bridge to the Zig sidecar's RawEvent struct and pollRawEvent function.
-// Not re-exported — used only by the pollEvent function below.
-
-bridge struct RawEvent {
-    bridge func create() RawEvent
-    bridge func poll(self: mut& RawEvent) bool
-    bridge func getTag(self: const& RawEvent) u8
-    bridge func getKeyScancode(self: const& RawEvent) u32
-    bridge func getKeyRepeat(self: const& RawEvent) bool
-    bridge func getMouseX(self: const& RawEvent) f32
-    bridge func getMouseY(self: const& RawEvent) f32
-    bridge func getMouseXRel(self: const& RawEvent) f32
-    bridge func getMouseYRel(self: const& RawEvent) f32
-    bridge func getMouseButton(self: const& RawEvent) u8
-    bridge func getMouseDown(self: const& RawEvent) bool
-    bridge func getGamepadWhich(self: const& RawEvent) u32
-    bridge func getGamepadAxis(self: const& RawEvent) u8
-    bridge func getGamepadAxisValue(self: const& RawEvent) i16
-    bridge func getGamepadButton(self: const& RawEvent) u8
-    bridge func getText(self: const& RawEvent) String
-    bridge func getWindowW(self: const& RawEvent) i32
-    bridge func getWindowH(self: const& RawEvent) i32
-    bridge func getPixelW(self: const& RawEvent) i32
-    bridge func getPixelH(self: const& RawEvent) i32
-    bridge func getTimestamp(self: const& RawEvent) u64
-}
-
 // ---- TAG constants (internal — match tamga_sdl3.zig TAG_* values) ----
 
 const TAG_NONE:                 u8 = 0
@@ -244,10 +212,13 @@ pub const Event: type = NullUnion((QuitEvent | KeyDownEvent | KeyUpEvent | Mouse
 // Polls for the next SDL3 event.
 // Returns null when the event queue is empty.
 // Use `is` dispatch on the result to determine the event type.
+//
+// RawEvent and its getter methods are auto-mapped from tamga_sdl3.zig.
+// GAP-002: struct fields are not auto-mapped — getter methods are used instead.
 
-pub func pollEvent() NullUnion((QuitEvent | KeyDownEvent | KeyUpEvent | MouseMotionEvent | MouseButtonEvent | GamepadAxisEvent | GamepadButtonEvent | GamepadConnectedEvent | GamepadDisconnectedEvent | TextInputEvent | WindowResizedEvent | WindowPixelResizedEvent | WindowCloseEvent)) {
-    var raw = RawEvent.create()
-    if(!raw.poll()) { return null }
+pub func pollEvent() Event {
+    var raw = tamga_sdl3.createRawEvent()
+    if(!tamga_sdl3.pollRawEvent(raw)) { return null }
     const tag = raw.getTag()
     const ts = raw.getTimestamp()
     if(tag == TAG_NONE) { return null }
@@ -298,68 +269,3 @@ pub func pollEvent() NullUnion((QuitEvent | KeyDownEvent | KeyUpEvent | MouseMot
     }
     return null
 }
-
-// ---- Event query helpers ----
-// Low-level alternative to pollEvent() — returns integer tags instead of typed unions.
-// Useful when callers only need a few event types without full union dispatch.
-
-// pollEventTag: polls one SDL event and returns a classification tag:
-//   0 = no event, 1 = quit, 2 = window_close, 3 = key_down, 99 = other
-// Caches the event internally for subsequent getLastScancode() calls.
-pub bridge func pollEventTag() i32
-
-// getLastScancode: returns the scancode from the last polled key event.
-// Only valid after pollEventTag() returned 3 (key_down).
-pub bridge func getLastScancode() u32
-
-// ---- Window bridge struct ----
-
-pub bridge struct Window {
-    bridge func create(title: String, w: i32, h: i32, flags: u64) ErrorUnion(Window)
-    bridge func destroy(self: mut& Window) void
-    bridge func setTitle(self: mut& Window, title: String) void
-    bridge func getWidth(self: const& Window) i32
-    bridge func getHeight(self: const& Window) i32
-    bridge func getPixelWidth(self: const& Window) i32
-    bridge func getPixelHeight(self: const& Window) i32
-    bridge func getDisplayScale(self: const& Window) f32
-    bridge func getHandle(self: const& Window) WindowHandle
-    bridge func setRelativeMouseMode(self: mut& Window, enabled: bool) bool
-    bridge func startTextInput(self: mut& Window) void
-    bridge func stopTextInput(self: mut& Window) void
-}
-
-// ---- Lifecycle ----
-// initPlatform returns ErrorUnion(void) — callers handle initialization failure via error union.
-
-pub bridge func initPlatform() ErrorUnion(void)
-pub bridge func quitPlatform() void
-pub bridge func getError() String
-
-// ---- Cursor ----
-
-pub bridge func hideCursor() void
-pub bridge func showCursor() void
-
-// ---- Gamepad ----
-
-pub bridge func openGamepad(id: u32) Ptr(u8)
-pub bridge func closeGamepad(handle: Ptr(u8)) void
-
-// ---- Display info ----
-
-pub struct DisplayInfo {
-    pub x: i32
-    pub y: i32
-    pub width: i32
-    pub height: i32
-    pub scale: f32
-}
-
-pub bridge func getDisplayCount() i32
-pub bridge func getDisplayInfo(index: i32) DisplayInfo
-
-// ---- Timing ----
-
-pub bridge func getTicksNS() u64
-pub bridge func delayNS(ns: u64) void
