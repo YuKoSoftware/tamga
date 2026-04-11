@@ -48,57 +48,30 @@ pub const TAG_WINDOW_CLOSE:         u8 = 15;
 // No SDL3 C types cross the bridge boundary.
 
 pub const RawEvent = struct {
-    tag: u8,                // discriminator: TAG_* constants above
-    key_scancode: u32,      // SDL scancode integer — Orhon layer maps to enum
-    key_repeat: bool,
-    mouse_x: f32,           // absolute cursor position
-    mouse_y: f32,
-    mouse_xrel: f32,        // relative delta since last motion event
-    mouse_yrel: f32,
-    mouse_button: u8,       // 1=left, 2=middle, 3=right
-    mouse_down: bool,
-    gamepad_which: u32,     // SDL_JoystickID cast to u32
-    gamepad_axis: u8,       // axis index
-    gamepad_axis_value: i16, // -32768..32767
-    gamepad_button: u8,     // button index
-    text: [32]u8,           // UTF-8 null-terminated text input
-    window_w: i32,          // logical dimensions (WINDOW_RESIZED)
-    window_h: i32,
-    pixel_w: i32,           // pixel dimensions (WINDOW_PIXEL_SIZE_CHANGED for HiDPI)
-    pixel_h: i32,
-    timestamp: u64,         // SDL event timestamp in nanoseconds
-
-    // ---- getter methods ----
-    // Called by the bridge struct declarations in tamga_sdl3.orh.
-
-    pub fn create() RawEvent {
-        return std.mem.zeroes(RawEvent);
-    }
-
-    pub fn poll(self: *RawEvent) bool {
-        return pollRawEvent(self);
-    }
-
-    pub fn getTag(self: *const RawEvent) u8 { return self.tag; }
-    pub fn getKeyScancode(self: *const RawEvent) u32 { return self.key_scancode; }
-    pub fn getKeyRepeat(self: *const RawEvent) bool { return self.key_repeat; }
-    pub fn getMouseX(self: *const RawEvent) f32 { return self.mouse_x; }
-    pub fn getMouseY(self: *const RawEvent) f32 { return self.mouse_y; }
-    pub fn getMouseXRel(self: *const RawEvent) f32 { return self.mouse_xrel; }
-    pub fn getMouseYRel(self: *const RawEvent) f32 { return self.mouse_yrel; }
-    pub fn getMouseButton(self: *const RawEvent) u8 { return self.mouse_button; }
-    pub fn getMouseDown(self: *const RawEvent) bool { return self.mouse_down; }
-    pub fn getGamepadWhich(self: *const RawEvent) u32 { return self.gamepad_which; }
-    pub fn getGamepadAxis(self: *const RawEvent) u8 { return self.gamepad_axis; }
-    pub fn getGamepadAxisValue(self: *const RawEvent) i16 { return self.gamepad_axis_value; }
-    pub fn getGamepadButton(self: *const RawEvent) u8 { return self.gamepad_button; }
-    pub fn getText(self: *const RawEvent) []const u8 { return std.mem.span(@as([*:0]const u8, @ptrCast(&self.text))); }
-    pub fn getWindowW(self: *const RawEvent) i32 { return self.window_w; }
-    pub fn getWindowH(self: *const RawEvent) i32 { return self.window_h; }
-    pub fn getPixelW(self: *const RawEvent) i32 { return self.pixel_w; }
-    pub fn getPixelH(self: *const RawEvent) i32 { return self.pixel_h; }
-    pub fn getTimestamp(self: *const RawEvent) u64 { return self.timestamp; }
+    pub tag: u8,                // discriminator: TAG_* constants above
+    pub key_scancode: u32,      // SDL scancode integer — Orhon layer maps to enum
+    pub key_repeat: bool,
+    pub mouse_x: f32,           // absolute cursor position
+    pub mouse_y: f32,
+    pub mouse_xrel: f32,        // relative delta since last motion event
+    pub mouse_yrel: f32,
+    pub mouse_button: u8,       // 1=left, 2=middle, 3=right
+    pub mouse_down: bool,
+    pub gamepad_which: u32,     // SDL_JoystickID cast to u32
+    pub gamepad_axis: u8,       // axis index
+    pub gamepad_axis_value: i16, // -32768..32767
+    pub gamepad_button: u8,     // button index
+    pub text: [32]u8,           // UTF-8 null-terminated text input
+    pub window_w: i32,          // logical dimensions (WINDOW_RESIZED)
+    pub window_h: i32,
+    pub pixel_w: i32,           // pixel dimensions (WINDOW_PIXEL_SIZE_CHANGED for HiDPI)
+    pub pixel_h: i32,
+    pub timestamp: u64,         // SDL event timestamp in nanoseconds
 };
+
+pub fn createRawEvent() RawEvent {
+    return std.mem.zeroes(RawEvent);
+}
 
 // ---- event polling ----
 
@@ -393,22 +366,3 @@ pub fn delayNS(ns: u64) void {
     c.SDL_DelayNS(ns);
 }
 
-// ---- event query helpers ----
-// Workaround for cross-module `is` codegen bug.
-
-var last_event: RawEvent = RawEvent.create();
-
-pub fn pollEventTag() i32 {
-    last_event = RawEvent.create();
-    if (!last_event.poll()) return 0;
-    return switch (last_event.tag) {
-        TAG_QUIT => 1,
-        TAG_WINDOW_CLOSE => 2,
-        TAG_KEY_DOWN => 3,
-        else => 99,
-    };
-}
-
-pub fn getLastScancode() u32 {
-    return last_event.key_scancode;
-}
