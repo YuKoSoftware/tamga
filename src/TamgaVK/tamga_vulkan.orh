@@ -1,44 +1,31 @@
 module tamga_vulkan
 
-#name    = "tamga_vulkan"
-#version = Version(0, 1, 2)
+#version = (0, 2, 0)
 #build   = static
-#cimport = { name: "vulkan", include: "vulkan/vulkan.h", source: "../../src/TamgaVK/libs/vma_impl.cpp" }
+
+// ---- Handle types ----
+// Opaque pointers for Vulkan/VMA resources. Nominally typed — each handle
+// is distinct at the type level. Cannot be dereferenced or cast in Orhon.
+
+pub handle VkInstanceHandle
+pub handle VkPhysicalDeviceHandle
+pub handle VkDeviceHandle
+pub handle VkBufferHandle
+pub handle VmaAllocationHandle
+pub handle StagingBufferHandle
 
 // ---- BufferAlloc ----
-// Returned by Allocator.createBuffer. Both fields are opaque pointers.
-// buffer: the Vulkan buffer handle (VkBuffer)
-// allocation: the VMA allocation handle (VmaAllocation)
+// Returned by Allocator.createBuffer. Both fields are typed handles.
 
 pub struct BufferAlloc {
-    pub buffer: Ptr(u8)
-    pub allocation: Ptr(u8)
+    pub buffer: VkBufferHandle
+    pub allocation: VmaAllocationHandle
 }
 
 // ---- StagingRegion ----
 // Returned by Allocator.stagingWrite.
-// buffer: the staging buffer (VkBuffer) — may be the ring buffer or a one-shot allocation
-// offset: byte offset within that buffer where the written data starts
 
 pub struct StagingRegion {
-    pub buffer: Ptr(u8)
+    pub buffer: StagingBufferHandle
     pub offset: u32
-}
-
-// ---- Allocator ----
-// VMA-backed GPU memory allocator.
-// Wraps a VmaAllocator handle + 16MB ring buffer staging area.
-//
-// Usage:
-//   const alloc = Allocator.create(instance, physical_device, device)!
-//   defer alloc.destroy()
-//   const buf = alloc.createBuffer(size, usage, true)!  // gpu_only = true
-//   alloc.destroyBuffer(buf.buffer, buf.allocation)
-
-pub bridge struct Allocator {
-    bridge func create(instance: Ptr(u8), physical_device: Ptr(u8), device: Ptr(u8)) ErrorUnion(Allocator)
-    bridge func destroy(self: mut& Allocator) void
-    bridge func createBuffer(self: mut& Allocator, size: u64, usage: u32, gpu_only: bool) ErrorUnion(BufferAlloc)
-    bridge func destroyBuffer(self: mut& Allocator, buffer: Ptr(u8), allocation: Ptr(u8)) void
-    bridge func stagingWrite(self: mut& Allocator, data: Ptr(u8), size: u32) ErrorUnion(StagingRegion)
 }
